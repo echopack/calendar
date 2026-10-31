@@ -1,0 +1,39 @@
+use calendar::{Period};
+use std::time;
+
+test period_text
+{
+    assert(str::from(Period::zero()) == 'PT0S');
+    assert(str::from(Period($years: 1, $months: 2, $days: 3)) == 'P1Y2M3D');
+    assert(str::from(Period($hours: 4, $seconds: 7, $nanoseconds: 500000000)) == 'PT4H7.500S');
+    assert(str::from(Period::days(-3)) == '-P3D');
+    assert(str::from(Period($months: 1, $days: -2)) == 'P1M-2D');
+    assert(str::from(Period::weeks(2)) == 'P2W');
+}
+
+test period_parse
+{
+    Period $p = guard Period::parse('P1Y2M3W4DT5H6M7.5S');
+    assert($p == Period($years: 1, $months: 2, $weeks: 3, $days: 4, $hours: 5, $minutes: 6, $seconds: 7, $nanoseconds: 500000000));
+    Period $n = guard Period::parse('-P3D');
+    assert($n == Period::days(-3));
+    Period $m = guard Period::parse('PT1M');
+    assert($m == Period::minutes(1));
+    assert(Period::parse('P')->failed());
+    assert(Period::parse('PT')->failed());
+    assert(Period::parse('P1D2Y')->failed());
+    assert(Period::parse('P1.5D')->failed());
+    assert(Period::parse('1D')->failed());
+}
+
+test period_arithmetic
+{
+    assert(Period::days(1) + Period::days(2) == Period::days(3));
+    assert(-Period::months(1) == Period::months(-1));
+    assert(Period::weeks(1) * 3 == Period::weeks(3));
+    assert(Period::days(1) != Period::hours(24));
+    assert(Period($hours: 1, $minutes: 30)->exact() == time::duration::mins(90));
+    assert(Period::days(1)->dated());
+    assert(!Period::hours(1)->dated());
+    assert(Period::zero()->empty());
+}

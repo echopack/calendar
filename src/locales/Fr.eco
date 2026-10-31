@@ -1,0 +1,51 @@
+namespace calendar;
+
+internal function frenchLocale() : Locale
+{
+    array<string> $months = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
+    array<string> $monthsShort = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+    array<string> $monthsStandaloneShort = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+    array<string> $monthsNarrow = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+    array<string> $weekdays = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+    array<string> $weekdaysShort = ['lun.', 'mar.', 'mer.', 'jeu.', 'ven.', 'sam.', 'dim.'];
+    array<string> $weekdaysNarrow = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+    array<string> $quarters = ['1er trimestre', '2e trimestre', '3e trimestre', '4e trimestre'];
+    array<string> $quartersShort = ['T1', 'T2', 'T3', 'T4'];
+    array<string> $eras = ['av. J.-C.', 'ap. J.-C.'];
+    array<string> $erasWide = ['avant Jésus-Christ', 'après Jésus-Christ'];
+    array<string> $dayPeriods = ['AM', 'PM'];
+    array<string> $units = ['an', 'ans', 'mois', 'mois', 'semaine', 'semaines', 'jour', 'jours', 'heure', 'heures', 'minute', 'minutes', 'seconde', 'secondes'];
+    array<string> $relative = [
+        'dans # an', 'dans # ans', 'il y a # an', 'il y a # ans',
+        'dans # mois', 'dans # mois', 'il y a # mois', 'il y a # mois',
+        'dans # semaine', 'dans # semaines', 'il y a # semaine', 'il y a # semaines',
+        'dans # jour', 'dans # jours', 'il y a # jour', 'il y a # jours',
+        'dans # heure', 'dans # heures', 'il y a # heure', 'il y a # heures',
+        'dans # minute', 'dans # minutes', 'il y a # minute', 'il y a # minutes',
+        'dans # seconde', 'dans # secondes', 'il y a # seconde', 'il y a # secondes',
+    ];
+    array<string> $nearDays = ['hier', 'aujourd’hui', 'demain'];
+
+    return Locale(
+        $id: 'fr',
+        $months: $months,
+        $monthsShort: $monthsShort,
+        $monthsStandaloneShort: $monthsStandaloneShort,
+        $monthsNarrow: $monthsNarrow,
+        $weekdays: $weekdays,
+        $weekdaysShort: $weekdaysShort,
+        $weekdaysNarrow: $weekdaysNarrow,
+        $quarters: $quarters,
+        $quartersShort: $quartersShort,
+        $eras: $eras,
+        $erasWide: $erasWide,
+        $dayPeriods: $dayPeriods,
+        $weekRule: WeekRule::iso(),
+        $plural: .zeroAndOne,
+        $units: $units,
+        $relative: $relative,
+        $nearDays: $nearDays,
+        $now: 'maintenant',
+        $and: 'et',
+    );
+}

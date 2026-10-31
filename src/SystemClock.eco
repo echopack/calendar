@@ -1,0 +1,14 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * The machine's wall clock.
+ */
+public class SystemClock : Clock
+{
+    public const function now() : time::timestamp
+    {
+        return time::timestamp::now();
+    }
+}

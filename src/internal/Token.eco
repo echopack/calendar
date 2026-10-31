@@ -1,0 +1,18 @@
+namespace calendar;
+
+/**
+ * One piece of a compiled pattern: a run of one field letter (`yyyy` is letter `y`, count 4)
+ * or literal text.
+ */
+internal struct Token
+{
+    internal const Letter $letter;
+    internal const int32 $count;
+    internal const string $text;
+    internal const usize $at;
+
+    internal const function literal() : bool
+    {
+        return $this->letter == Letter::text;
+    }
+}

@@ -1,0 +1,228 @@
+namespace calendar;
+
+use std::math;
+
+/**
+ * The words a language uses for dates: month and weekday names, eras, AM and PM, and the
+ * phrases for relative times.
+ *
+ * Plain data. The built-in ones are `Locale::en()`, `de()`, `fr()` and `it()`; build your own
+ * with the field names. Arrays run January to December, Monday to Sunday, and for the unit
+ * words year, month, week, day, hour, minute, second.
+ *
+ * `$units` holds two words per unit, singular then plural: `year`, `years`, `month`, ...
+ * `$relative` holds four phrases per unit with `#` where the number goes: future singular,
+ * future plural, past singular, past plural: `in # year`, `in # years`, `# year ago`, ...
+ */
+public class Locale
+{
+    public const string $id;
+    public const array<string> $months;
+    public const array<string> $monthsShort;
+    public const array<string> $monthsStandaloneShort;
+    public const array<string> $monthsNarrow;
+    public const array<string> $weekdays;
+    public const array<string> $weekdaysShort;
+    public const array<string> $weekdaysNarrow;
+    public const array<string> $quarters;
+    public const array<string> $quartersShort;
+    public const array<string> $eras;
+    public const array<string> $erasWide;
+    public const array<string> $dayPeriods;
+    /**
+     * The week rule people of this language usually count by. Nothing applies it on its own;
+     * pass it to a `Calendar` or a `Format` when you want it.
+     */
+    public const WeekRule $weekRule;
+    public const Plural $plural;
+    public const array<string> $units;
+    public const array<string> $relative;
+    public const array<string> $nearDays;
+    public const string $now;
+    public const string $and;
+
+    internal static Locale $english = englishLocale('en', WeekRule(.sunday, 1));
+    internal static Locale $englishIso = englishLocale('en', WeekRule::iso());
+    internal static Locale $german = germanLocale();
+    internal static Locale $french = frenchLocale();
+    internal static Locale $italian = italianLocale();
+
+    /**
+     * English. Weeks start on Sunday, as in the United States; the rule is only used when you
+     * ask the locale for it.
+     */
+    public static function en() : Locale
+    {
+        return Locale::$english;
+    }
+
+    /**
+     * German, as written in Germany, Austria and Switzerland.
+     */
+    public static function de() : Locale
+    {
+        return Locale::$german;
+    }
+
+    /**
+     * French, as written in France and Switzerland.
+     */
+    public static function fr() : Locale
+    {
+        return Locale::$french;
+    }
+
+    /**
+     * Italian, as written in Italy and Switzerland.
+     */
+    public static function it() : Locale
+    {
+        return Locale::$italian;
+    }
+
+    /**
+     * A built-in locale by tag: `de`, `de-CH`, `fr_CH`, `en-GB`. English outside the United
+     * States gets the ISO week rule. Null for a language that is not built in.
+     */
+    public static function of(const string& $tag) : Locale?
+    {
+        string $lang = str::lower($tag);
+        string $region = '';
+
+        if ($lang->size() > 2 && ($lang->byte(2) == 45 || $lang->byte(2) == 95)) {
+            $region = string::from($lang->sub(3, $lang->size() - 3));
+            $lang = string::from($lang->sub(0, 2));
+        }
+
+        if ($lang == 'de') {
+            return Locale::$german;
+        }
+
+        if ($lang == 'fr') {
+            return Locale::$french;
+        }
+
+        if ($lang == 'it') {
+            return Locale::$italian;
+        }
+
+        if ($lang == 'en') {
+            if ($region->empty() || $region == 'us') {
+                return Locale::$english;
+            }
+
+            return Locale::$englishIso;
+        }
+
+        return null;
+    }
+
+    /**
+     * The name of `$month`, full or short.
+     */
+    public const function month(Month $month, bool $short = false) : string
+    {
+        usize $i = ($month->number() - 1) as usize;
+
+        if ($short) {
+            return $this->monthsShort[$i];
+        }
+
+        return $this->months[$i];
+    }
+
+    /**
+     * The name of `$day`, full or short.
+     */
+    public const function weekday(Weekday $day, bool $short = false) : string
+    {
+        usize $i = ($day->number() - 1) as usize;
+
+        if ($short) {
+            return $this->weekdaysShort[$i];
+        }
+
+        return $this->weekdays[$i];
+    }
+
+    // the month names a field of $count letters uses: 3 short, 4 full, 5 narrow
+    internal const function monthNames(int32 $count, bool $standalone) : const array<string>&
+    {
+        if ($count == 5) {
+            return &$this->monthsNarrow;
+        }
+
+        if ($count == 4) {
+            return &$this->months;
+        }
+
+        if ($standalone) {
+            return &$this->monthsStandaloneShort;
+        }
+
+        return &$this->monthsShort;
+    }
+
+    // the weekday names a field of $count letters uses: up to 3 short, 4 full, 5 narrow
+    internal const function weekdayNames(int32 $count) : const array<string>&
+    {
+        if ($count == 5) {
+            return &$this->weekdaysNarrow;
+        }
+
+        if ($count == 4) {
+            return &$this->weekdays;
+        }
+
+        return &$this->weekdaysShort;
+    }
+
+    /**
+     * `$count` and the unit word: `1 day`, `3 Tage`.
+     */
+    public const function count(int64 $count, Unit $unit) : string
+    {
+        usize $i = Locale::slot($unit) * 2;
+
+        if (!$this->plural->singular($count)) {
+            $i = $i + 1;
+        }
+
+        string $word = $this->units[$i];
+        return "{$count} {$word}";
+    }
+
+    /**
+     * The phrase for `$count` units from now, negative for the past: `in 3 days`,
+     * `vor 2 Stunden`.
+     */
+    public const function relative(int64 $count, Unit $unit) : string
+    {
+        usize $i = Locale::slot($unit) * 4;
+
+        if ($count < 0) {
+            $i = $i + 2;
+        }
+
+        if (!$this->plural->singular($count)) {
+            $i = $i + 1;
+        }
+
+        return str::replace_first($this->relative[$i], '#', str::from(math::abs($count)));
+    }
+
+    // year, month, week, day, hour, minute, second; quarters count as three months
+    internal static function slot(Unit $unit) : usize
+    {
+        return match ($unit) {
+            .year => 0,
+            .quarter => 1,
+            .month => 1,
+            .week => 2,
+            .day => 3,
+            .hour => 4,
+            .minute => 5,
+            else => 6,
+        };
+    }
+}

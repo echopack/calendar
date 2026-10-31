@@ -1,0 +1,21 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A clock stopped at one instant.
+ */
+public class FixedClock : Clock
+{
+    public const time::timestamp $at;
+
+    constructor(time::timestamp $at)
+    {
+        $this->at = $at;
+    }
+
+    public const function now() : time::timestamp
+    {
+        return $this->at;
+    }
+}

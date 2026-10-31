@@ -1,0 +1,306 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A time of day on a wall clock, from 00:00 to 23:59:59.999999999, with no date and no zone.
+ *
+ * Adding past midnight wraps around: 23:00 plus two hours is 01:00. When the day matters,
+ * use a `DateTime`.
+ */
+public struct Time : contract::comparable<Time>
+{
+    public const int32 $hour;
+    public const int32 $minute;
+    public const int32 $second;
+    public const int32 $nanosecond;
+
+    constructor(int32 $hour, int32 $minute = 0, int32 $second = 0, int32 $nanosecond = 0)
+    {
+        guard Time::check($hour as int64, $minute as int64, $second as int64, $nanosecond as int64);
+
+        $this->hour = $hour;
+        $this->minute = $minute;
+        $this->second = $second;
+        $this->nanosecond = $nanosecond;
+    }
+
+    /**
+     * The time `$nanos` nanoseconds after midnight, 0 up to one day.
+     */
+    constructor(nanos: int64 $nanos)
+    {
+        if ($nanos < 0 || $nanos >= NANOS_PER_DAY) {
+            die("calendar: {$nanos} nanoseconds is not a time of day");
+        }
+
+        $this->hour = ($nanos / NANOS_PER_HOUR) as int32;
+        $this->minute = (($nanos / NANOS_PER_MINUTE) % 60) as int32;
+        $this->second = (($nanos / NANOS_PER_SEC) % 60) as int32;
+        $this->nanosecond = ($nanos % NANOS_PER_SEC) as int32;
+    }
+
+    /**
+     * A time from runtime numbers, checked.
+     */
+    public static function of(int64 $hour, int64 $minute = 0, int64 $second = 0, int64 $nanosecond = 0) : result<Time, DateError>
+    {
+        guard Time::check($hour, $minute, $second, $nanosecond) else ($e) {
+            return .error($e);
+        };
+
+        return .ok(Time($hour as int32, $minute as int32, $second as int32, $nanosecond as int32));
+    }
+
+    public static function midnight() : Time
+    {
+        return Time(0);
+    }
+
+    public static function noon() : Time
+    {
+        return Time(12);
+    }
+
+    /**
+     * Parse ISO 8601 `HH:MM`, `HH:MM:SS` or `HH:MM:SS.fffffffff`. A leap second `:60` reads
+     * as `:59`; the library has no leap seconds.
+     */
+    public static function parse(const string& $text) : result<Time, ParseError>
+    {
+        Scanner $s = Scanner($text);
+        Time $t = guard Time::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        return .ok($t);
+    }
+
+    /**
+     * Parse with a pattern, `h:mm a`. The hour is required; minutes, seconds and fractions
+     * the pattern leaves out are zero.
+     */
+    public static function parse(const string& $text, const Format& $format) : result<Time, ParseError>
+    {
+        Fields $f = guard Fields::read($format, $text, Zone::system()) else ($e) {
+            return .error($e);
+        };
+
+        return $f->time();
+    }
+
+    /**
+     * Nanoseconds since midnight.
+     */
+    public const function nanos() : int64
+    {
+        return ($this->hour as int64) * NANOS_PER_HOUR + ($this->minute as int64) * NANOS_PER_MINUTE
+            + ($this->second as int64) * NANOS_PER_SEC + ($this->nanosecond as int64);
+    }
+
+    /**
+     * Move the clock by `$d`, wrapping around midnight in either direction.
+     */
+    public const function add(const time::duration& $d) : Time
+    {
+        int64 $secs = floorMod($d->as_secs(), SECS_PER_DAY);
+        int64 $total = $this->nanos() + $secs * NANOS_PER_SEC + ($d->subsec_nanos() as int64);
+        return Time(nanos: floorMod($total, NANOS_PER_DAY));
+    }
+
+    public const function sub(const time::duration& $d) : Time
+    {
+        return $this->add(-$d);
+    }
+
+    /**
+     * The signed length from this time to `$other` on the same day. 22:00 until 02:00 is
+     * minus 20 hours, not plus 4; put both on dates when the day can change.
+     */
+    public const function until(const Time& $other) : time::duration
+    {
+        return time::duration::nanos($other->nanos() - $this->nanos());
+    }
+
+    public const function until(const Time& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        return $unit->count($this->until($other), $mode);
+    }
+
+    public const function since(const Time& $other) : time::duration
+    {
+        return $other->until($this);
+    }
+
+    public const function since(const Time& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        return $other->until($this, $unit, $mode);
+    }
+
+    /**
+     * Round to a multiple of `$unit`. A result of 24:00 wraps to midnight. Units of a day and
+     * up are refused.
+     */
+    public const function round(Unit $unit, Rounding $mode = .halfExpand) : Time
+    {
+        int64 $length = Time::clock($unit);
+        int64 $n = $this->nanos();
+        int64 $q = $mode->apply($n / $length, $n % $length, $length);
+        return Time(nanos: floorMod($q * $length, NANOS_PER_DAY));
+    }
+
+    /**
+     * Cut off everything below `$unit`: 14:35:12 at `.hour` is 14:00.
+     */
+    public const function start(Unit $unit) : Time
+    {
+        return $this->round($unit, .trunc);
+    }
+
+    /**
+     * A copy with some fields replaced.
+     */
+    public const function with(int32? $hour = null, int32? $minute = null, int32? $second = null, int32? $nanosecond = null) : Time
+    {
+        return Time($hour ?? $this->hour, $minute ?? $this->minute, $second ?? $this->second, $nanosecond ?? $this->nanosecond);
+    }
+
+    /**
+     * This time on a date.
+     */
+    public const function on(const Date& $date) : DateTime
+    {
+        return DateTime($date, $this);
+    }
+
+    /**
+     * Render with a pattern, `dd.MM.yyyy`, names in `$locale`. A bad pattern stops the
+     * program; compile runtime patterns with `Format::of` first.
+     */
+    public const function format(const string& $pattern, Locale $locale = Locale::en()) : string
+    {
+        return Format($pattern)->locale($locale)->render($this);
+    }
+
+    /**
+     * Render with a compiled format, in the format's own language.
+     */
+    public const function format(const Format& $format) : string
+    {
+        return $format->render($this);
+    }
+
+    internal static function check(int64 $hour, int64 $minute, int64 $second, int64 $nanosecond) : status<DateError>
+    {
+        if ($hour < 0 || $hour > 23) {
+            return .error(.outOfRange(.hour, $hour));
+        }
+
+        if ($minute < 0 || $minute > 59) {
+            return .error(.outOfRange(.minute, $minute));
+        }
+
+        if ($second < 0 || $second > 59) {
+            return .error(.outOfRange(.second, $second));
+        }
+
+        if ($nanosecond < 0 || $nanosecond >= NANOS_PER_SEC) {
+            return .error(.outOfRange(.nanosecond, $nanosecond));
+        }
+
+        return .ok;
+    }
+
+    // the exact length of a clock unit; a day or more has no place on a clock
+    internal static function clock(Unit $unit) : int64
+    {
+        if (!$unit->clock()) {
+            die('calendar: a Time rounds to hours or smaller units');
+        }
+
+        return $unit->nanos();
+    }
+
+    internal static function scan(Scanner& $s) : result<Time, ParseError>
+    {
+        usize $at = $s->at;
+        int64 $hour = guard $s->digits(2, 2) else {
+            return .error(.expected($at, 'a two-digit hour'));
+        };
+
+        if (!$s->eat(58)) {
+            return .error(.expected($s->at, "':'"));
+        }
+
+        usize $minuteAt = $s->at;
+        int64 $minute = guard $s->digits(2, 2) else {
+            return .error(.expected($minuteAt, 'a two-digit minute'));
+        };
+
+        int64 $second = 0;
+        int64 $nanos = 0;
+        usize $secondAt = $s->at;
+
+        if ($s->eat(58)) {
+            $secondAt = $s->at;
+            int64 $sec = guard $s->digits(2, 2) else {
+                return .error(.expected($secondAt, 'a two-digit second'));
+            };
+            $second = $sec;
+
+            if ($s->eat(46) || $s->eat(44)) {
+                int64 $read = guard $s->fraction() else {
+                    return .error(.expected($s->at, 'a digit'));
+                };
+                $nanos = $read;
+            }
+        }
+
+        if ($hour > 23) {
+            return .error(.invalid(.hour, $hour, $at));
+        }
+
+        if ($minute > 59) {
+            return .error(.invalid(.minute, $minute, $minuteAt));
+        }
+
+        if ($second == 60) {
+            $second = 59;
+        }
+
+        if ($second > 59) {
+            return .error(.invalid(.second, $second, $secondAt));
+        }
+
+        return .ok(Time($hour as int32, $minute as int32, $second as int32, $nanos as int32));
+    }
+}
+
+operator (const Time& $a) == (const Time& $b) : bool
+{
+    return $a->nanos() == $b->nanos();
+}
+
+operator (const Time& $a) != (const Time& $b) : bool
+{
+    return !($a == $b);
+}
+
+operator (const Time& $a) < (const Time& $b) : bool
+{
+    return $a->nanos() < $b->nanos();
+}
+
+operator (const Time& $a) + (const time::duration& $d) : Time
+{
+    return $a->add($d);
+}
+
+operator (const Time& $a) - (const time::duration& $d) : Time
+{
+    return $a->sub($d);
+}

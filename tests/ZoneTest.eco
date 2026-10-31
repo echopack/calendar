@@ -1,0 +1,115 @@
+use calendar::{Zone, ZoneError, Offset, SystemZones, Date, DateTime, Month};
+use std::time;
+
+function ts(int64 $secs) : time::timestamp
+{
+    return time::timestamp::from_unix_secs($secs);
+}
+
+function zone(const string& $id) : Zone
+{
+    Zone $z = guard Zone::named($id);
+    return $z;
+}
+
+test zone_zurich_2026
+{
+    $z = zone('Europe/Zurich');
+    assert($z->id == 'Europe/Zurich');
+    assert($z->offset(ts(1774746000 - 1)) == Offset(hours: 1));
+    assert($z->offset(ts(1774746000)) == Offset(hours: 2));
+    assert($z->abbreviation(ts(1774746000)) == 'CEST');
+    assert($z->dst(ts(1774746000)));
+    assert($z->offset(ts(1792890000 - 1)) == Offset(hours: 2));
+    assert($z->offset(ts(1792890000)) == Offset(hours: 1));
+    assert($z->abbreviation(ts(1792890000)) == 'CET');
+
+    time::timestamp $next = guard $z->next(ts(1774746000));
+    assert($next == ts(1792890000));
+    time::timestamp $prev = guard $z->previous(ts(1792890000));
+    assert($prev == ts(1774746000));
+}
+
+test zone_far_future_uses_rule
+{
+    $z = zone('Europe/Zurich');
+    assert($z->offset(ts(4109878800 - 1)) == Offset(hours: 1));
+    assert($z->offset(ts(4109878800)) == Offset(hours: 2));
+    assert($z->offset(ts(4128627600 - 1)) == Offset(hours: 2));
+    assert($z->offset(ts(4128627600)) == Offset(hours: 1));
+    time::timestamp $next = guard $z->next(ts(4109878800));
+    assert($next == ts(4128627600));
+}
+
+test zone_new_york_lord_howe_apia_casablanca
+{
+    $ny = zone('America/New_York');
+    assert($ny->offset(ts(1772953200)) == Offset(hours: -4));
+    assert($ny->offset(ts(1793512800)) == Offset(hours: -5));
+    assert($ny->abbreviation(ts(1793512800)) == 'EST');
+
+    $lh = zone('Australia/Lord_Howe');
+    assert($lh->offset(ts(1775314800 - 1)) == Offset(hours: 11));
+    assert($lh->offset(ts(1775314800)) == Offset(hours: 10, 30));
+    assert($lh->offset(ts(1791041400)) == Offset(hours: 11));
+
+    $apia = zone('Pacific/Apia');
+    assert($apia->offset(ts(1325239200 - 1)) == Offset(hours: -10));
+    assert($apia->offset(ts(1325239200)) == Offset(hours: 14));
+
+    $casa = zone('Africa/Casablanca');
+    assert($casa->offset(ts(1771120800 - 3600)) == Offset(hours: 1));
+    assert($casa->offset(ts(1771120800 + 3600)) == Offset(hours: 0));
+}
+
+test zone_candidates
+{
+    $z = zone('Europe/Zurich');
+    assert($z->candidates(DateTime(2026, .march, 29, 2, 30))->count() == 0);
+    array<Offset> $both = $z->candidates(DateTime(2026, .october, 25, 2, 30));
+    assert($both->count() == 2);
+    assert($both[0] == Offset(hours: 2));
+    assert($both[1] == Offset(hours: 1));
+    assert($z->candidates(DateTime(2026, .october, 28, 9, 30))->count() == 1);
+    assert(zone('Pacific/Apia')->candidates(DateTime(2011, .december, 30, 12))->count() == 0);
+}
+
+test zone_names_and_errors
+{
+    assert(Zone::named('Nowhere/Atlantis')->failed());
+    assert(str::from(Zone::named('Nowhere/Atlantis')->failure()) == "no time zone named 'Nowhere/Atlantis'");
+    assert(str::from(Zone::named('../etc/passwd')->failure()) == "'../etc/passwd' is not a time zone name");
+    assert(Zone::named('/etc/passwd')->failed());
+    assert(!SystemZones::valid(''));
+    assert(SystemZones::valid('America/Argentina/Buenos_Aires'));
+    assert(SystemZones::valid('Etc/GMT+5'));
+    assert(Zone::utc()->fixed());
+    assert(Zone(offset: Offset(hours: 5, 30))->id == '+05:30');
+    assert(!zone('Europe/Zurich')->fixed());
+    assert(Zone::system()->ids()->count() > 300);
+}
+
+test zone_offset_text
+{
+    assert(str::from(Offset(hours: -3, 30)) == '-03:30');
+    assert(str::from(Offset(0)) == '+00:00');
+    assert(str::from(Offset(3600 + 1800 + 15)) == '+01:30:15');
+    Offset $z = guard Offset::parse('Z');
+    assert($z == Offset::utc());
+    Offset $p = guard Offset::parse('+0530');
+    assert($p == Offset(hours: 5, 30));
+    Offset $q = guard Offset::parse('-08');
+    assert($q == Offset(hours: -8));
+    assert(Offset::parse('+1:00')->failed());
+    assert(Offset::parse('+01:')->failed());
+}
+
+test zone_from_a_literal_name
+{
+    $zurich = Zone(named: 'Europe/Zurich');
+    Zone $loaded = guard Zone::named('Europe/Zurich');
+    assert($zurich->id == 'Europe/Zurich');
+    $at = time::timestamp::from_unix_secs(1793176200);
+    assert($zurich->offset($at) == $loaded->offset($at));
+    assert($zurich->abbreviation($at) == 'CET');
+}

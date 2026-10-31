@@ -1,0 +1,609 @@
+namespace calendar;
+
+use std::math;
+use std::time;
+
+/**
+ * A day on the Gregorian calendar, extended backwards past 1582, with no time and no zone.
+ *
+ * Years run from -9999 to 9999; year 0 is 1 BC. A birthday, a due date, a holiday: anything
+ * that is the same day wherever you are. Values are immutable; every method hands back a
+ * new date.
+ *
+ * `Date(2026, .october, 28)` stops the program on an impossible date, so use it for dates
+ * you write in code. Numbers that arrive at runtime go through `Date::of`, which returns a
+ * result.
+ */
+public struct Date : contract::comparable<Date>
+{
+    public const int32 $year;
+    public const Month $month;
+    public const int32 $day;
+
+    constructor(int32 $year, Month $month, int32 $day)
+    {
+        guard Date::check($year as int64, $month->number() as int64, $day as int64);
+
+        $this->year = $year;
+        $this->month = $month;
+        $this->day = $day;
+    }
+
+    /**
+     * The date `$days` days after 1970-01-01. Negative goes back.
+     */
+    constructor(epochDay: int64 $days)
+    {
+        if ($days < MIN_DAY || $days > MAX_DAY) {
+            die("calendar: epoch day {$days} is outside the years -9999 to 9999");
+        }
+
+        int64 $z = $days + 719468;
+        int64 $era = floorDiv($z, 146097);
+        int64 $doe = $z - $era * 146097;
+        int64 $yoe = ($doe - $doe / 1460 + $doe / 36524 - $doe / 146096) / 365;
+        int64 $doy = $doe - (365 * $yoe + $yoe / 4 - $yoe / 100);
+        int64 $mp = (5 * $doy + 2) / 153;
+        int64 $month = $mp + 3;
+
+        if ($mp >= 10) {
+            $month = $mp - 9;
+        }
+
+        int64 $year = $yoe + $era * 400;
+
+        if ($month <= 2) {
+            $year = $year + 1;
+        }
+
+        $this->year = $year as int32;
+        Month $m = guard Month::of($month);
+        $this->month = $m;
+        $this->day = ($doy - (153 * $mp + 2) / 5 + 1) as int32;
+    }
+
+    /**
+     * The `$weekday` of week `$week` under `$rule`. `Date(week: Week(2020, 53), .sunday)` is
+     * 2021-01-03.
+     */
+    constructor(week: Week $week, Weekday $weekday, WeekRule $rule = WeekRule::iso())
+    {
+        if ($week->number < 1 || $week->number > $rule->weeks($week->year)) {
+            die("calendar: week year {$week->year} has no week {$week->number}");
+        }
+
+        int64 $serial = $rule->first($week->year as int64) + (($week->number - 1) as int64) * 7
+            + $rule->firstDay->until($weekday);
+        $d = Date(epochDay: $serial);
+
+        $this->year = $d->year;
+        $this->month = $d->month;
+        $this->day = $d->day;
+    }
+
+    /**
+     * A date from runtime numbers, checked.
+     */
+    public static function of(int64 $year, int64 $month, int64 $day) : result<Date, DateError>
+    {
+        guard Date::check($year, $month, $day) else ($e) {
+            return .error($e);
+        };
+
+        Month $m = guard Month::of($month);
+        return .ok(Date($year as int32, $m, $day as int32));
+    }
+
+    /**
+     * Parse an ISO 8601 calendar date, `2026-10-28`, strictly: four-digit year with an
+     * optional sign, two-digit month and day, nothing before or after.
+     */
+    public static function parse(const string& $text) : result<Date, ParseError>
+    {
+        Scanner $s = Scanner($text);
+        Date $d = guard Date::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        return .ok($d);
+    }
+
+    /**
+     * Parse with a pattern, `dd.MM.yyyy`. The text has to say year, month and day (or a day
+     * of the year, or a week date); nothing is filled in from today. A weekday in the text
+     * has to match the date. Names are read in `$locale`, ignoring ASCII case.
+     */
+    public static function parse(const string& $text, const Format& $format) : result<Date, ParseError>
+    {
+        Fields $f = guard Fields::read($format, $text, Zone::system()) else ($e) {
+            return .error($e);
+        };
+
+        return $f->date($format->rule);
+    }
+
+    /**
+     * The earliest supported date, -9999-01-01.
+     */
+    public static function min() : Date
+    {
+        return Date(epochDay: MIN_DAY);
+    }
+
+    /**
+     * The latest supported date, 9999-12-31.
+     */
+    public static function max() : Date
+    {
+        return Date(epochDay: MAX_DAY);
+    }
+
+    /**
+     * True for Gregorian leap years: every fourth year, except centuries not divisible by 400.
+     */
+    public static function leap(int32 $year) : bool
+    {
+        if ($year % 4 != 0) {
+            return false;
+        }
+
+        if ($year % 100 != 0) {
+            return true;
+        }
+
+        return $year % 400 == 0;
+    }
+
+    /**
+     * True when this date's year is a leap year.
+     */
+    public const function leap() : bool
+    {
+        return Date::leap($this->year);
+    }
+
+    /**
+     * Days since 1970-01-01.
+     */
+    public const function epochDay() : int64
+    {
+        return Date::serial($this->year as int64, $this->month->number() as int64, $this->day as int64);
+    }
+
+    public const function weekday() : Weekday
+    {
+        return Date::weekdayOf($this->epochDay());
+    }
+
+    /**
+     * The day of the year, 1 to 366.
+     */
+    public const function ordinal() : int32
+    {
+        return ($this->epochDay() - Date::serial($this->year as int64, 1, 1) + 1) as int32;
+    }
+
+    /**
+     * The quarter, 1 to 4.
+     */
+    public const function quarter() : int32
+    {
+        return $this->month->quarter();
+    }
+
+    /**
+     * The week this date falls in, and that week's year, under `$rule`.
+     */
+    public const function week(WeekRule $rule = WeekRule::iso()) : Week
+    {
+        int64 $day = $this->epochDay();
+        int64 $year = $this->year as int64;
+        int64 $first = $rule->first($year);
+
+        if ($day < $first) {
+            $year = $year - 1;
+            $first = $rule->first($year);
+        } else {
+            int64 $next = $rule->first($year + 1);
+
+            if ($day >= $next) {
+                $year = $year + 1;
+                $first = $next;
+            }
+        }
+
+        return Week($year as int32, (($day - $first) / 7 + 1) as int32);
+    }
+
+    /**
+     * Add a period, clamping the day when the target month is shorter. Clock fields are
+     * refused: a date has no time to move.
+     */
+    public const function add(const Period& $p) : Date
+    {
+        Date::dated($p);
+        Date $d = guard $this->shift($p->totalMonths(), $p->totalDays(), .clamp);
+        return $d;
+    }
+
+    /**
+     * Add a period with an explicit overflow rule. `.reject` fails instead of clamping.
+     */
+    public const function add(const Period& $p, Overflow $mode) : result<Date, DateError>
+    {
+        Date::dated($p);
+        return $this->shift($p->totalMonths(), $p->totalDays(), $mode);
+    }
+
+    public const function sub(const Period& $p) : Date
+    {
+        return $this->add(-$p);
+    }
+
+    public const function sub(const Period& $p, Overflow $mode) : result<Date, DateError>
+    {
+        return $this->add(-$p, $mode);
+    }
+
+    /**
+     * The calendar distance to `$other` in years, months and days.
+     *
+     * Months are counted first: the most whole months that can be added to this date
+     * without passing `$other`, then the days that remain. That makes `$a + $a->until($b)`
+     * land on `$b`. Going backwards every field is negative.
+     */
+    public const function until(const Date& $other) : Period
+    {
+        int64 $months = Date::monthsBetween($this, $other);
+        Date $base = $this->months($months);
+
+        if ($months > 0 && $base > $other) {
+            $months = $months - 1;
+            $base = $this->months($months);
+        } else if ($months < 0 && $base < $other) {
+            $months = $months + 1;
+            $base = $this->months($months);
+        }
+
+        return Period::split($months, $other->epochDay() - $base->epochDay(), 0);
+    }
+
+    /**
+     * How many whole `$unit`s from this date to `$other`. Positive when `$other` is later;
+     * the remainder is dropped toward zero unless `$mode` says otherwise. Clock units count
+     * 24-hour days.
+     */
+    public const function until(const Date& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        if ($unit->calendar()) {
+            return Date::countMonths($this, $other, $unit->months(), $mode);
+        }
+
+        int64 $days = $other->epochDay() - $this->epochDay();
+        return $unit->count(time::duration::secs($days * SECS_PER_DAY), $mode);
+    }
+
+    /**
+     * The mirror of `until`: the distance from `$other` to this date.
+     */
+    public const function since(const Date& $other) : Period
+    {
+        return $other->until($this);
+    }
+
+    public const function since(const Date& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        return $other->until($this, $unit, $mode);
+    }
+
+    /**
+     * The first day of the year, quarter, month or week this date is in. Day and smaller
+     * units return the date itself.
+     */
+    public const function start(Unit $unit, WeekRule $rule = WeekRule::iso()) : Date
+    {
+        return match ($unit) {
+            .year => Date($this->year, .january, 1),
+            .quarter => Date($this->year, $this->month->plus(-((($this->month->number() - 1) % 3) as int64)), 1),
+            .month => Date($this->year, $this->month, 1),
+            .week => $this->sub(Period::days($rule->firstDay->until($this->weekday()))),
+            else => $this,
+        };
+    }
+
+    /**
+     * The last day of the year, quarter, month or week this date is in. Dates are whole
+     * days, so the last day is included; there is no end-of-day instant to get wrong.
+     */
+    public const function end(Unit $unit, WeekRule $rule = WeekRule::iso()) : Date
+    {
+        return match ($unit) {
+            .year => Date($this->year, .december, 31),
+            .quarter => $this->start(.quarter)->add(Period::months(3))->sub(Period::days(1)),
+            .month => Date($this->year, $this->month, $this->month->days($this->year)),
+            .week => $this->start(.week, $rule)->add(Period::days(6)),
+            else => $this,
+        };
+    }
+
+    /**
+     * The whole year, quarter, month or week this date is in, as a range of days. Day and
+     * smaller units give the one day.
+     */
+    public const function span(Unit $unit, WeekRule $rule = WeekRule::iso()) : DateRange
+    {
+        return DateRange(from: $this->start($unit, $rule), through: $this->end($unit, $rule));
+    }
+
+    /**
+     * The next `$weekday` strictly after this date.
+     */
+    public const function next(Weekday $weekday) : Date
+    {
+        int64 $ahead = $this->weekday()->until($weekday);
+
+        if ($ahead == 0) {
+            $ahead = 7;
+        }
+
+        return Date(epochDay: $this->epochDay() + $ahead);
+    }
+
+    /**
+     * The last `$weekday` strictly before this date.
+     */
+    public const function previous(Weekday $weekday) : Date
+    {
+        int64 $back = $weekday->until($this->weekday());
+
+        if ($back == 0) {
+            $back = 7;
+        }
+
+        return Date(epochDay: $this->epochDay() - $back);
+    }
+
+    /**
+     * A copy with some fields replaced. The day clamps to the target month, so
+     * `->with($month: .february)` on the 31st gives the 28th or 29th.
+     */
+    public const function with(int32? $year = null, Month? $month = null, int32? $day = null) : Date
+    {
+        int32 $y = $year ?? $this->year;
+        Month $m = $month ?? $this->month;
+        int32 $d = $day ?? $this->day;
+        int32 $last = $m->days($y);
+
+        if ($d > $last) {
+            $d = $last;
+        }
+
+        return Date($y, $m, $d);
+    }
+
+    /**
+     * This date at a time of day.
+     */
+    public const function at(const Time& $time) : DateTime
+    {
+        return DateTime($this, $time);
+    }
+
+    /**
+     * Midnight at the start of this date.
+     */
+    public const function midnight() : DateTime
+    {
+        return DateTime($this, Time::midnight());
+    }
+
+    /**
+     * Render with a pattern, `dd.MM.yyyy`, names in `$locale`. A bad pattern stops the
+     * program; compile runtime patterns with `Format::of` first.
+     */
+    public const function format(const string& $pattern, Locale $locale = Locale::en()) : string
+    {
+        return Format($pattern)->locale($locale)->render($this);
+    }
+
+    /**
+     * Render with a compiled format, in the format's own language.
+     */
+    public const function format(const Format& $format) : string
+    {
+        return $format->render($this);
+    }
+
+    // year, month and day in range and the day present in its month
+    internal static function check(int64 $year, int64 $month, int64 $day) : status<DateError>
+    {
+        if ($year < MIN_YEAR || $year > MAX_YEAR) {
+            return .error(.outOfRange(.year, $year));
+        }
+
+        Month $m = guard Month::of($month) else {
+            return .error(.outOfRange(.month, $month));
+        };
+
+        if ($day < 1 || $day > ($m->days($year as int32) as int64)) {
+            return .error(.noDay($year, $month, $day));
+        }
+
+        return .ok;
+    }
+
+    // days since 1970-01-01 for any proleptic Gregorian year, no range check
+    internal static function serial(int64 $year, int64 $month, int64 $day) : int64
+    {
+        int64 $y = $year;
+        int64 $mp = $month - 3;
+
+        if ($month <= 2) {
+            $y = $y - 1;
+            $mp = $month + 9;
+        }
+
+        int64 $era = floorDiv($y, 400);
+        int64 $yoe = $y - $era * 400;
+        int64 $doy = (153 * $mp + 2) / 5 + $day - 1;
+        int64 $doe = $yoe * 365 + $yoe / 4 - $yoe / 100 + $doy;
+        return $era * 146097 + $doe - 719468;
+    }
+
+    // 1970-01-01 was a Thursday
+    internal static function weekdayOf(int64 $serial) : Weekday
+    {
+        Weekday $w = guard Weekday::of(floorMod($serial + 3, 7) + 1);
+        return $w;
+    }
+
+    internal static function scan(Scanner& $s) : result<Date, ParseError>
+    {
+        int64 $sign = 1;
+
+        if ($s->eat(45)) {
+            $sign = -1;
+        } else {
+            $s->eat(43);
+        }
+
+        usize $at = $s->at;
+        int64 $year = guard $s->digits(4, 4) else {
+            return .error(.expected($at, 'a four-digit year'));
+        };
+
+        if (!$s->eat(45)) {
+            return .error(.expected($s->at, "'-'"));
+        }
+
+        usize $monthAt = $s->at;
+        int64 $month = guard $s->digits(2, 2) else {
+            return .error(.expected($monthAt, 'a two-digit month'));
+        };
+
+        if (!$s->eat(45)) {
+            return .error(.expected($s->at, "'-'"));
+        }
+
+        usize $dayAt = $s->at;
+        int64 $day = guard $s->digits(2, 2) else {
+            return .error(.expected($dayAt, 'a two-digit day'));
+        };
+
+        if ($month < 1 || $month > 12) {
+            return .error(.invalid(.month, $month, $monthAt));
+        }
+
+        Date $d = guard Date::of($year * $sign, $month, $day) else {
+            return .error(.invalid(.day, $day, $dayAt));
+        };
+
+        return .ok($d);
+    }
+
+    internal static function dated(const Period& $p) : void
+    {
+        if (!$p->dated()) {
+            die('calendar: a Date has no clock; add hours, minutes or seconds to a DateTime or Zoned');
+        }
+    }
+
+    // move by months then days. the day clamps or fails per $mode
+    internal const function shift(int64 $months, int64 $days, Overflow $mode) : result<Date, DateError>
+    {
+        int64 $total = ($this->year as int64) * 12 + ($this->month->number() as int64) - 1 + $months;
+        int64 $year = floorDiv($total, 12);
+        int64 $month = floorMod($total, 12) + 1;
+
+        if ($year < MIN_YEAR || $year > MAX_YEAR) {
+            return .error(.overflow);
+        }
+
+        Month $m = guard Month::of($month);
+        int64 $day = $this->day as int64;
+        int64 $last = $m->days($year as int32) as int64;
+
+        if ($day > $last) {
+            if ($mode == Overflow::reject) {
+                return .error(.noDay($year, $month, $day));
+            }
+
+            $day = $last;
+        }
+
+        int64 $serial = Date::serial($year, $month, $day) + $days;
+
+        if ($serial < MIN_DAY || $serial > MAX_DAY) {
+            return .error(.overflow);
+        }
+
+        return .ok(Date(epochDay: $serial));
+    }
+
+    // this date plus $n months, clamped
+    internal const function months(int64 $n) : Date
+    {
+        Date $d = guard $this->shift($n, 0, .clamp);
+        return $d;
+    }
+
+    internal static function monthsBetween(const Date& $a, const Date& $b) : int64
+    {
+        return (($b->year - $a->year) as int64) * 12 + (($b->month->number() - $a->month->number()) as int64);
+    }
+
+    // whole steps of $step months from $a to $b, the rest rounded by the length of the next step
+    internal static function countMonths(const Date& $a, const Date& $b, int64 $step, Rounding $mode) : int64
+    {
+        int64 $months = $a->until($b)->totalMonths();
+        int64 $whole = $months / $step;
+        Date $base = $a->months($whole * $step);
+        int64 $num = $b->epochDay() - $base->epochDay();
+
+        if ($num == 0) {
+            return $whole;
+        }
+
+        int64 $toward = sign64($num);
+        Date $next = $a->months(($whole + $toward) * $step);
+        int64 $den = math::abs($next->epochDay() - $base->epochDay());
+        return $mode->apply($whole, $num, $den);
+    }
+}
+
+operator (const Date& $a) == (const Date& $b) : bool
+{
+    return $a->year == $b->year && $a->month == $b->month && $a->day == $b->day;
+}
+
+operator (const Date& $a) != (const Date& $b) : bool
+{
+    return !($a == $b);
+}
+
+operator (const Date& $a) < (const Date& $b) : bool
+{
+    if ($a->year != $b->year) {
+        return $a->year < $b->year;
+    }
+
+    if ($a->month != $b->month) {
+        return $a->month->number() < $b->month->number();
+    }
+
+    return $a->day < $b->day;
+}
+
+operator (const Date& $a) + (const Period& $p) : Date
+{
+    return $a->add($p);
+}
+
+operator (const Date& $a) - (const Period& $p) : Date
+{
+    return $a->sub($p);
+}

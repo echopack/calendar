@@ -1,0 +1,159 @@
+namespace calendar;
+
+/**
+ * Reader for compiled zone files (TZif, versions 1 to 4).
+ *
+ * Version 2 and later carry the table twice: once with 32-bit times for old readers, then
+ * with 64-bit times and a POSIX TZ footer. The 32-bit block is skipped. Leap second records
+ * are skipped too; the library counts in Unix time, which has none.
+ */
+internal struct Tzif
+{
+    internal static function parse(const string& $id, const string& $bytes) : result<Zone, ZoneError>
+    {
+        if (!Tzif::magic($bytes, 0)) {
+            return .error(.corrupt($id));
+        }
+
+        uint8 $version = $bytes->byte(4);
+        usize $header = 0;
+        usize $width = 4;
+
+        if ($version >= 50) {
+            usize $skip = Tzif::block($bytes, 0, 4);
+
+            if ($skip == 0 || !Tzif::magic($bytes, 44 + $skip)) {
+                return .error(.corrupt($id));
+            }
+
+            $header = 44 + $skip;
+            $width = 8;
+        }
+
+        if ($header + 44 > $bytes->size()) {
+            return .error(.corrupt($id));
+        }
+
+        usize $size = Tzif::block($bytes, $header, $width);
+
+        if ($size == 0) {
+            return .error(.corrupt($id));
+        }
+
+        usize $timecnt = Tzif::u32($bytes, $header + 32) as usize;
+        usize $typecnt = Tzif::u32($bytes, $header + 36) as usize;
+        usize $charcnt = Tzif::u32($bytes, $header + 40) as usize;
+
+        if ($typecnt == 0) {
+            return .error(.corrupt($id));
+        }
+
+        usize $at = $header + 44;
+        array<int64> $times = arr::room<int64>($timecnt);
+        array<int32> $kinds = arr::room<int32>($timecnt);
+        array<ZoneType> $types = arr::room<ZoneType>($typecnt);
+
+        for ($i = 0; $i < $timecnt; $i++) {
+            if ($width == 8) {
+                $times[] = Tzif::i64($bytes, $at + $i * 8);
+            } else {
+                $times[] = Tzif::u32($bytes, $at + $i * 4) as int32 as int64;
+            }
+        }
+
+        $at = $at + $timecnt * $width;
+
+        for ($i = 0; $i < $timecnt; $i++) {
+            int32 $kind = $bytes->byte($at + $i) as int32;
+
+            if (($kind as usize) >= $typecnt) {
+                return .error(.corrupt($id));
+            }
+
+            $kinds[] = $kind;
+        }
+
+        $at = $at + $timecnt;
+        usize $chars = $at + $typecnt * 6;
+
+        for ($i = 0; $i < $typecnt; $i++) {
+            usize $p = $at + $i * 6;
+            int32 $offset = Tzif::u32($bytes, $p) as int32;
+            bool $dst = $bytes->byte($p + 4) != 0;
+            usize $abbr = $bytes->byte($p + 5) as usize;
+
+            if ($abbr >= $charcnt) {
+                return .error(.corrupt($id));
+            }
+
+            $types[] = ZoneType($offset, $dst, Tzif::text($bytes, $chars + $abbr, $chars + $charcnt));
+        }
+
+        PosixRule? $rule = null;
+        usize $footer = $header + 44 + $size;
+
+        if ($width == 8 && $footer < $bytes->size() && $bytes->byte($footer) == 10) {
+            usize $close = $bytes->find("\n", $footer + 1);
+
+            if ($close < $bytes->size() && $close > $footer + 1) {
+                string $tz = string::from($bytes->sub($footer + 1, $close - $footer - 1));
+                $rule = PosixRule::parse($tz);
+            }
+        }
+
+        return .ok(Zone($id, mv $times, mv $kinds, mv $types, $rule));
+    }
+
+    private static function magic(const string& $bytes, usize $at) : bool
+    {
+        if ($at + 44 > $bytes->size()) {
+            return false;
+        }
+
+        return $bytes->byte($at) == 84 && $bytes->byte($at + 1) == 90
+            && $bytes->byte($at + 2) == 105 && $bytes->byte($at + 3) == 102;
+    }
+
+    // bytes in the data block after the header at $at, 0 when it runs past the end
+    private static function block(const string& $bytes, usize $at, usize $width) : usize
+    {
+        usize $isut = Tzif::u32($bytes, $at + 20) as usize;
+        usize $isstd = Tzif::u32($bytes, $at + 24) as usize;
+        usize $leap = Tzif::u32($bytes, $at + 28) as usize;
+        usize $time = Tzif::u32($bytes, $at + 32) as usize;
+        usize $type = Tzif::u32($bytes, $at + 36) as usize;
+        usize $char = Tzif::u32($bytes, $at + 40) as usize;
+        usize $size = $time * $width + $time + $type * 6 + $char + $leap * ($width + 4) + $isstd + $isut;
+
+        if ($at + 44 + $size > $bytes->size()) {
+            return 0;
+        }
+
+        return $size;
+    }
+
+    private static function u32(const string& $bytes, usize $at) : uint32
+    {
+        return (($bytes->byte($at) as uint32) << 24) | (($bytes->byte($at + 1) as uint32) << 16)
+            | (($bytes->byte($at + 2) as uint32) << 8) | ($bytes->byte($at + 3) as uint32);
+    }
+
+    private static function i64(const string& $bytes, usize $at) : int64
+    {
+        uint64 $hi = Tzif::u32($bytes, $at) as uint64;
+        uint64 $lo = Tzif::u32($bytes, $at + 4) as uint64;
+        return (($hi << 32) | $lo) as int64;
+    }
+
+    // a NUL-terminated abbreviation starting at $at
+    private static function text(const string& $bytes, usize $at, usize $limit) : string
+    {
+        usize $end = $at;
+
+        while ($end < $limit && $bytes->byte($end) != 0) {
+            $end = $end + 1;
+        }
+
+        return string::from($bytes->sub($at, $end - $at));
+    }
+}

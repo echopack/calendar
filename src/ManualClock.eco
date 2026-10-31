@@ -1,0 +1,32 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A clock that moves only when told to. Keep a handle, give the same object to a
+ * `Calendar`, and `advance` it between steps of a test.
+ */
+public class ManualClock : Clock
+{
+    private time::timestamp $current;
+
+    constructor(time::timestamp $start)
+    {
+        $this->current = $start;
+    }
+
+    public const function now() : time::timestamp
+    {
+        return $this->current;
+    }
+
+    public function set(time::timestamp $at) : void
+    {
+        $this->current = $at;
+    }
+
+    public function advance(const time::duration& $by) : void
+    {
+        $this->current = $this->current + $by;
+    }
+}

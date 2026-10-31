@@ -1,0 +1,236 @@
+/**
+ * `str::from` for the library's values, so `"{$date}"` works. Each type renders its ISO 8601
+ * form, which also parses back.
+ */
+
+namespace str;
+
+use calendar::{Date, Time, DateTime, Period, Week, DateRange, DateError, ParseError, Month, Weekday};
+
+public function from(const Date& $d) : string
+{
+    $y = calendar::pad($d->year as int64, 4);
+    $m = calendar::pad($d->month->number() as int64, 2);
+    $day = calendar::pad($d->day as int64, 2);
+    return "{$y}-{$m}-{$day}";
+}
+
+public function from(const Time& $t) : string
+{
+    $h = calendar::pad($t->hour as int64, 2);
+    $m = calendar::pad($t->minute as int64, 2);
+    $s = calendar::pad($t->second as int64, 2);
+    string $out = "{$h}:{$m}:{$s}";
+
+    if ($t->nanosecond != 0) {
+        $out->append('.');
+        $out->append(calendar::fraction($t->nanosecond as int64));
+    }
+
+    return $out;
+}
+
+public function from(const DateTime& $dt) : string
+{
+    return "{$dt->date}T{$dt->time}";
+}
+
+public function from(const Week& $w) : string
+{
+    $y = calendar::pad($w->year as int64, 4);
+    $n = calendar::pad($w->number as int64, 2);
+    return "{$y}-W{$n}";
+}
+
+public function from(const DateRange& $r) : string
+{
+    return "[{$r->start}, {$r->end})";
+}
+
+/**
+ * ISO 8601: `P1Y2M3DT4H5M6.5S`, `PT0S` for nothing. When every field is zero or negative the
+ * sign goes in front (`-P3D`); mixed signs are written per field.
+ */
+public function from(const Period& $p) : string
+{
+    if ($p->empty()) {
+        return 'PT0S';
+    }
+
+    int64 $secs = $p->seconds + $p->nanoseconds / calendar::NANOS_PER_SEC;
+    int64 $nanos = $p->nanoseconds % calendar::NANOS_PER_SEC;
+
+    if ($secs > 0 && $nanos < 0) {
+        $secs = $secs - 1;
+        $nanos = $nanos + calendar::NANOS_PER_SEC;
+    } else if ($secs < 0 && $nanos > 0) {
+        $secs = $secs + 1;
+        $nanos = $nanos - calendar::NANOS_PER_SEC;
+    }
+
+    bool $negative = $p->years <= 0 && $p->months <= 0 && $p->weeks <= 0 && $p->days <= 0
+        && $p->hours <= 0 && $p->minutes <= 0 && $secs <= 0 && $nanos <= 0;
+    int64 $k = 1;
+    string $out = 'P';
+
+    if ($negative) {
+        $k = -1;
+        $out = '-P';
+    }
+
+    periodPart($out, $p->years * $k, 'Y');
+    periodPart($out, $p->months * $k, 'M');
+    periodPart($out, $p->weeks * $k, 'W');
+    periodPart($out, $p->days * $k, 'D');
+
+    if ($p->hours == 0 && $p->minutes == 0 && $secs == 0 && $nanos == 0) {
+        return $out;
+    }
+
+    $out->append('T');
+    periodPart($out, $p->hours * $k, 'H');
+    periodPart($out, $p->minutes * $k, 'M');
+
+    if ($secs != 0 || $nanos != 0) {
+        $secs = $secs * $k;
+        $nanos = $nanos * $k;
+
+        if ($secs < 0 || $nanos < 0) {
+            $out->append('-');
+        }
+
+        $out->append(from(std::math::abs($secs)));
+
+        if ($nanos != 0) {
+            $out->append('.');
+            $out->append(calendar::fraction(std::math::abs($nanos)));
+        }
+
+        $out->append('S');
+    }
+
+    return $out;
+}
+
+private function periodPart(string& $out, int64 $value, const string& $unit) : void
+{
+    if ($value == 0) {
+        return;
+    }
+
+    $out->append(from($value));
+    $out->append($unit);
+}
+
+public function from(const DateError& $e) : string
+{
+    return match ($e) {
+        DateError::outOfRange($field, $value) => concat($field->label(), " {$value} is out of range"),
+        DateError::noDay($year, $month, $day) => noDay($year, $month, $day),
+        DateError::overflow => 'the result is outside the years -9999 to 9999',
+        DateError::gap($zone) => "that wall-clock time is skipped in {$zone}",
+        DateError::overlap($zone) => "that wall-clock time happens twice in {$zone}",
+    };
+}
+
+public function from(const ParseError& $e) : string
+{
+    return match ($e) {
+        ParseError::expected($at, $what) => concat("expected {$what} at byte ", from($at as uint64)),
+        ParseError::invalid($field, $value, $at) => invalidAt($field, $value, $at as uint64),
+        ParseError::trailing($at) => concat('unexpected text at byte ', from($at as uint64)),
+        ParseError::missing($field) => concat('the text has no ', $field->label()),
+        ParseError::impossible($reason) => from($reason),
+        ParseError::unknownZone($id, $at) => concat("no time zone named '{$id}' at byte ", from($at as uint64)),
+        ParseError::conflict($at) => concat('the offset does not match the zone at byte ', from($at as uint64)),
+        ParseError::mismatch($field) => concat($field->label(), ' does not match the rest of the text'),
+    };
+}
+
+private function noDay(int64 $year, int64 $month, int64 $day) : string
+{
+    $y = calendar::pad($year, 4);
+    $m = calendar::pad($month, 2);
+    return "{$y}-{$m} has no day {$day}";
+}
+
+private function invalidAt(calendar::Field $field, int64 $value, uint64 $at) : string
+{
+    $name = $field->label();
+    return "{$name} {$value} at byte {$at} is out of range";
+}
+
+public function from(const calendar::Offset& $o) : string
+{
+    return $o->text(true, true);
+}
+
+/**
+ * RFC 9557: the wall clock, the offset and the zone id, `2026-10-28T09:30:00+01:00[Europe/Zurich]`.
+ */
+public function from(const calendar::Zoned& $z) : string
+{
+    $local = $z->local();
+    $offset = $z->offset;
+    $id = $z->zone->id;
+    return "{$local}{$offset}[{$id}]";
+}
+
+/**
+ * RFC 3339 in UTC, `[2026-10-28T08:30:00Z, 2026-10-29T08:30:00Z)`.
+ */
+public function from(const calendar::Interval& $i) : string
+{
+    $start = calendar::Zoned($i->start, calendar::Zone::utc())->local();
+    $end = calendar::Zoned($i->end, calendar::Zone::utc())->local();
+    return "[{$start}Z, {$end}Z)";
+}
+
+public function from(const calendar::ZoneError& $e) : string
+{
+    return match ($e) {
+        calendar::ZoneError::unknown($id) => "no time zone named '{$id}'",
+        calendar::ZoneError::invalid($id) => "'{$id}' is not a time zone name",
+        calendar::ZoneError::corrupt($id) => "the zone file for '{$id}' is damaged",
+        calendar::ZoneError::unreadable($id, $reason) => "the zone file for '{$id}' could not be read: {$reason}",
+    };
+}
+
+public function from(const calendar::FormatError& $e) : string
+{
+    return match ($e) {
+        calendar::FormatError::empty => 'the pattern is empty',
+        calendar::FormatError::unknownLetter($letter, $at) => concat("'{$letter}' is not a pattern letter; quote literal text like 'this', at byte ", from($at as uint64)),
+        calendar::FormatError::tooLong($letter, $at) => concat("too many '{$letter}' in a row at byte ", from($at as uint64)),
+        calendar::FormatError::unclosedQuote($at) => concat('a quote is never closed, from byte ', from($at as uint64)),
+        calendar::FormatError::weekYearWithoutWeek($at) => concat("'Y' is the week-based year and the pattern has no week 'w'; did you mean 'y'? at byte ", from($at as uint64)),
+        calendar::FormatError::weekWithoutWeekYear($at) => concat("'w' counts weeks of the week-based year; pair it with 'Y', not 'y', at byte ", from($at as uint64)),
+        calendar::FormatError::dayOfYearWithMonth($at) => concat("'D' is the day of the year; did you mean 'd'? at byte ", from($at as uint64)),
+        calendar::FormatError::minuteWithoutHour($at) => concat("'m' is minutes and the pattern has no hour; did you mean 'M'? at byte ", from($at as uint64)),
+        calendar::FormatError::hourWithoutPeriod($at) => concat("'h' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte ", from($at as uint64)),
+    };
+}
+
+/**
+ * `"{$date:dd.MM.yyyy}"`: the spec is a pattern, rendered with English names. A bad pattern
+ * in source is a bug and stops the program with the reason.
+ */
+public function from(const calendar::Date& $d, const string& $spec) : string
+{
+    return calendar::Format($spec)->render($d);
+}
+
+public function from(const calendar::Time& $t, const string& $spec) : string
+{
+    return calendar::Format($spec)->render($t);
+}
+
+public function from(const calendar::DateTime& $dt, const string& $spec) : string
+{
+    return calendar::Format($spec)->render($dt);
+}
+
+public function from(const calendar::Zoned& $z, const string& $spec) : string
+{
+    return calendar::Format($spec)->render($z);
+}

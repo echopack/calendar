@@ -1,0 +1,591 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A compiled date pattern in the Unicode letter syntax: `yyyy-MM-dd`, `EEEE, d. MMMM yyyy`,
+ * `HH:mm:ss.SSS XXX`. Letters are fields, text in single quotes is literal (`''` is one
+ * quote), and anything that is not a letter is literal as it stands.
+ *
+ * | Letters | Field |
+ * |---|---|
+ * | `G` | era: `AD`; `GGGG` `Anno Domini` |
+ * | `y` `yy` `yyyy` | year of the era; `yy` is the last two digits |
+ * | `u` | year with a sign, -9999 to 9999 |
+ * | `Y` | year of the week; only with `w` |
+ * | `Q` `QQQ` `QQQQ` | quarter: `4`, `Q4`, `4th quarter` |
+ * | `M` `MM` `MMM` `MMMM` `MMMMM` | month: `9`, `09`, `Sep`, `September`, `S`; `L` the standalone form |
+ * | `w` | week of the week year |
+ * | `d` `D` | day of the month; day of the year |
+ * | `E` `EEEE` `EEEEE` | weekday: `Mon`, `Monday`, `M`; `e` `c` its number from the week start |
+ * | `a` | AM or PM |
+ * | `H` `k` `h` `K` | hour 0-23, 1-24, 1-12, 0-11 |
+ * | `m` `s` `S` | minute, second, fraction of a second (one digit per `S`) |
+ * | `z` `zzzz` | zone abbreviation, `CET`; the long form is the zone id |
+ * | `Z` `ZZZZ` `ZZZZZ` | offset `+0100`, `GMT+01:00`, `+01:00` |
+ * | `X` `XX` `XXX` | offset `+01`, `+0100`, `+01:00`, or `Z` for zero; `x` never writes `Z` |
+ * | `O` `OOOO` | offset `GMT+1`, `GMT+01:00` |
+ * | `VV` | zone id, `Europe/Zurich` |
+ *
+ * A format carries everything it needs: the language its names are in (`locale()`, English
+ * by default), the week rule for `Y`, `w` and `e` (`weeks()`, ISO by default) and the century
+ * for `yy` (`pivot()`). Nothing is passed per call, and nothing changes them behind your back.
+ * A `Calendar` fills in its own locale and week rule only when it is handed a pattern string.
+ *
+ * `Format('dd.MM.yyyy')` stops the program on a bad pattern, so use it for patterns you write
+ * in code. A pattern that arrives at runtime goes through `Format::of`, which returns a result.
+ */
+public class Format
+{
+    public const string $pattern;
+    internal array<Token> $tokens;
+    internal WeekRule $rule;
+    internal int64 $pivot;
+
+    // a zone the format always writes and reads in, and the language of its names
+    internal Zone? $zone;
+    internal Locale $names;
+
+    internal static Format $rfc3339Format = Format::fixed("yyyy-MM-dd'T'HH:mm:ssXXX", null);
+    internal static Format $rfc2822Format = Format::fixed('EEE, dd MMM yyyy HH:mm:ss xx', null);
+    internal static Format $httpFormat = Format::fixed("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Zone::utc());
+
+    internal constructor(string $pattern, array<Token> $tokens, WeekRule $rule, int64 $pivot, Zone? $zone, Locale $names)
+    {
+        $this->pattern = $pattern;
+        $this->tokens = $tokens;
+        $this->rule = $rule;
+        $this->pivot = $pivot;
+        $this->zone = $zone;
+        $this->names = $names;
+    }
+
+    /**
+     * A pattern written in code. A bad one is a bug, so it stops the program with the reason.
+     */
+    constructor(string $pattern)
+    {
+        Format $f = guard Format::of($pattern) else ($e) {
+            die("calendar: bad date pattern '{$pattern}': {$e}");
+        };
+
+        $this->pattern = $f->pattern;
+        $this->tokens = $f->tokens;
+        $this->rule = $f->rule;
+        $this->pivot = $f->pivot;
+        $this->zone = $f->zone;
+        $this->names = $f->names;
+    }
+
+    /**
+     * Compile a pattern from runtime text, refusing unknown letters and the usual mix-ups.
+     */
+    public static function of(const string& $pattern) : result<Format, FormatError>
+    {
+        if ($pattern->empty()) {
+            return .error(.empty);
+        }
+
+        array<Token> $tokens = [];
+        usize $n = $pattern->size();
+        usize $i = 0;
+        string $text = '';
+        usize $textAt = 0;
+
+        while ($i < $n) {
+            uint8 $c = $pattern->byte($i);
+
+            if ($text->empty()) {
+                $textAt = $i;
+            }
+
+            if ($c == 39) {
+                // '' is a quote; 'abc' is literal text
+                if ($i + 1 < $n && $pattern->byte($i + 1) == 39) {
+                    $text->append("'");
+                    $i = $i + 2;
+                    continue;
+                }
+
+                usize $close = $i + 1;
+                bool $closed = false;
+
+                while ($close < $n) {
+                    if ($pattern->byte($close) == 39) {
+                        if ($close + 1 < $n && $pattern->byte($close + 1) == 39) {
+                            $text->append("'");
+                            $close = $close + 2;
+                            continue;
+                        }
+
+                        $closed = true;
+                        break;
+                    }
+
+                    $text->append($pattern->sub($close, 1));
+                    $close = $close + 1;
+                }
+
+                if (!$closed) {
+                    return .error(.unclosedQuote($i));
+                }
+
+                $i = $close + 1;
+                continue;
+            }
+
+            bool $letter = ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122);
+
+            if (!$letter) {
+                $text->append($pattern->sub($i, 1));
+                $i = $i + 1;
+                continue;
+            }
+
+            Letter $field = guard Letter::from($c) else {
+                return .error(.unknownLetter(string::from($pattern->sub($i, 1)), $i));
+            };
+
+            usize $start = $i;
+
+            while ($i < $n && $pattern->byte($i) == $c) {
+                $i = $i + 1;
+            }
+
+            int32 $count = ($i - $start) as int32;
+
+            if (!$field->allows($count)) {
+                return .error(.tooLong(string::from($pattern->sub($start, 1)), $start));
+            }
+
+            if (!$text->empty()) {
+                $tokens[] = Token(Letter::text, 0, $text, $textAt);
+                $text = '';
+            }
+
+            $tokens[] = Token($field, $count, '', $start);
+        }
+
+        if (!$text->empty()) {
+            $tokens[] = Token(Letter::text, 0, $text, $textAt);
+        }
+
+        guard Format::check($pattern, $tokens) else ($e) {
+            return .error($e);
+        };
+
+        return .ok(Format($pattern, $tokens, WeekRule::iso(), 2000, null, Locale::en()));
+    }
+
+    /**
+     * RFC 3339, `2026-10-28T09:30:00+01:00`.
+     */
+    public static function rfc3339() : Format
+    {
+        return Format::$rfc3339Format;
+    }
+
+    /**
+     * RFC 2822 and RFC 5322 mail dates, `Wed, 28 Oct 2026 09:30:00 +0100`. English.
+     */
+    public static function rfc2822() : Format
+    {
+        return Format::$rfc2822Format;
+    }
+
+    /**
+     * HTTP dates, `Wed, 28 Oct 2026 08:30:00 GMT`. English and always in UTC: a `Zoned` is
+     * converted before it is written.
+     */
+    public static function http() : Format
+    {
+        return Format::$httpFormat;
+    }
+
+    /**
+     * A copy that writes and reads month, weekday, era and AM/PM names in `$locale`.
+     */
+    public const function locale(Locale $locale) : Format
+    {
+        return Format($this->pattern, $this->tokens, $this->rule, $this->pivot, $this->zone, $locale);
+    }
+
+    /**
+     * A copy that counts weeks (`Y`, `w`, `e`) under `$rule` instead of ISO.
+     */
+    public const function weeks(WeekRule $rule) : Format
+    {
+        return Format($this->pattern, $this->tokens, $rule, $this->pivot, $this->zone, $this->names);
+    }
+
+    /**
+     * A copy that reads two-digit years (`yy`) into the hundred years starting at `$start`.
+     * The default is 2000, so `26` is 2026 and `99` is 2099; with `pivot(1950)`, `99` is 1999.
+     * Never derived from today's date, so the same text always reads the same.
+     */
+    public const function pivot(int32 $start) : Format
+    {
+        return Format($this->pattern, $this->tokens, $this->rule, $start as int64, $this->zone, $this->names);
+    }
+
+    public const function render(const Date& $date) : string
+    {
+        return $this->write(Moment($date: $date, $kind: 'a Date'));
+    }
+
+    public const function render(const Time& $time) : string
+    {
+        return $this->write(Moment($time: $time, $kind: 'a Time'));
+    }
+
+    public const function render(const DateTime& $dt) : string
+    {
+        return $this->write(Moment($date: $dt->date, $time: $dt->time, $kind: 'a DateTime'));
+    }
+
+    public const function render(const Zoned& $z) : string
+    {
+        Zoned $at = $z;
+
+        if ($this->zone != null) {
+            Zone $zone = guard $this->zone;
+            $at = $z->to($zone);
+        }
+
+        return $this->write(Moment($at->date, $at->time, $at->offset, $at->zone, $at->instant, 'a Zoned'));
+    }
+
+    // a protocol format: always English, optionally always in one zone
+    private static function fixed(const string& $pattern, Zone? $zone) : Format
+    {
+        Format $f = Format($pattern);
+        return Format($f->pattern, $f->tokens, WeekRule::iso(), 2000, $zone, Locale::en());
+    }
+
+    private static function check(const string& $pattern, const array<Token>& $tokens) : status<FormatError>
+    {
+        bool $week = false;
+        bool $calendarYear = false;
+        bool $month = false;
+        bool $hour = false;
+        bool $period = false;
+        bool $dated = false;
+        usize $weekYearAt = $pattern->size();
+        usize $weekAt = $pattern->size();
+        usize $dayOfYearAt = $pattern->size();
+        usize $minuteAt = $pattern->size();
+        usize $twelveAt = $pattern->size();
+
+        foreach ($tokens as const &$t) {
+            Letter $l = $t->letter;
+            usize $at = $t->at;
+
+            if ($l == Letter::text) {
+                continue;
+            }
+
+            if ($l == Letter::week) {
+                $week = true;
+                $weekAt = $at;
+            } else if ($l == Letter::weekYear && $weekYearAt == $pattern->size()) {
+                $weekYearAt = $at;
+            } else if ($l == Letter::year || $l == Letter::signedYear) {
+                $calendarYear = true;
+            } else if ($l == Letter::month || $l == Letter::monthAlone) {
+                $month = true;
+            } else if ($l == Letter::dayOfYear) {
+                $dayOfYearAt = $at;
+            } else if ($l == Letter::minute && $minuteAt == $pattern->size()) {
+                $minuteAt = $at;
+            } else if ($l == Letter::hour12 || $l == Letter::hour11) {
+                $hour = true;
+                $twelveAt = $at;
+            } else if ($l == Letter::hour || $l == Letter::hour24) {
+                $hour = true;
+            } else if ($l == Letter::dayPeriod) {
+                $period = true;
+            }
+
+            if ($l == Letter::year || $l == Letter::signedYear || $l == Letter::day || $l == Letter::month || $l == Letter::monthAlone) {
+                $dated = true;
+            }
+        }
+
+        if ($weekYearAt < $pattern->size() && !$week) {
+            return .error(.weekYearWithoutWeek($weekYearAt));
+        }
+
+        if ($week && $weekYearAt == $pattern->size() && $calendarYear) {
+            return .error(.weekWithoutWeekYear($weekAt));
+        }
+
+        if ($dayOfYearAt < $pattern->size() && $month) {
+            return .error(.dayOfYearWithMonth($dayOfYearAt));
+        }
+
+        if ($minuteAt < $pattern->size() && !$hour && $dated) {
+            return .error(.minuteWithoutHour($minuteAt));
+        }
+
+        if ($twelveAt < $pattern->size() && !$period) {
+            return .error(.hourWithoutPeriod($twelveAt));
+        }
+
+        return .ok;
+    }
+
+    internal const function write(const Moment& $m) : string
+    {
+        Locale $names = $this->names;
+        string $out = '';
+
+        foreach ($this->tokens as const &$t) {
+            if ($t->literal()) {
+                $out->append($t->text);
+                continue;
+            }
+
+            if ($t->letter->dated()) {
+                Date $d = guard $m->date else {
+                    die("calendar: the pattern '{$this->pattern}' needs a date, and {$m->kind} has none");
+                };
+
+                $out->append($this->dateField($t, $d, $names));
+            } else if ($t->letter->timed()) {
+                Time $time = guard $m->time else {
+                    die("calendar: the pattern '{$this->pattern}' needs a time of day, and {$m->kind} has none");
+                };
+
+                $out->append(Format::timeField($t, $time, $names));
+            } else {
+                Offset $o = guard $m->offset else {
+                    die("calendar: the pattern '{$this->pattern}' needs a zone, and {$m->kind} has none");
+                };
+
+                $out->append(Format::zoneField($t, $o, $m));
+            }
+        }
+
+        return $out;
+    }
+
+    private const function dateField(const Token& $t, const Date& $d, Locale $names) : string
+    {
+        Letter $l = $t->letter;
+        int32 $n = $t->count;
+        int64 $year = $d->year as int64;
+
+        if ($l == Letter::era) {
+            usize $era = 1;
+
+            if ($year <= 0) {
+                $era = 0;
+            }
+
+            if ($n == 4) {
+                return $names->erasWide[$era];
+            }
+
+            return $names->eras[$era];
+        }
+
+        if ($l == Letter::year) {
+            int64 $ofEra = $year;
+
+            if ($year <= 0) {
+                $ofEra = 1 - $year;
+            }
+
+            return Format::year($ofEra, $n);
+        }
+
+        if ($l == Letter::signedYear) {
+            return pad($year, $n as usize);
+        }
+
+        if ($l == Letter::weekYear) {
+            return Format::year($d->week($this->rule)->year as int64, $n);
+        }
+
+        if ($l == Letter::quarter || $l == Letter::quarterAlone) {
+            int64 $q = $d->quarter() as int64;
+
+            if ($n >= 4) {
+                return $names->quarters[($q - 1) as usize];
+            }
+
+            if ($n == 3) {
+                return $names->quartersShort[($q - 1) as usize];
+            }
+
+            return pad($q, $n as usize);
+        }
+
+        if ($l == Letter::month || $l == Letter::monthAlone) {
+            if ($n >= 3) {
+                return $names->monthNames($n, $l == Letter::monthAlone)[($d->month->number() - 1) as usize];
+            }
+
+            return pad($d->month->number() as int64, $n as usize);
+        }
+
+        if ($l == Letter::week) {
+            return pad($d->week($this->rule)->number as int64, $n as usize);
+        }
+
+        if ($l == Letter::day) {
+            return pad($d->day as int64, $n as usize);
+        }
+
+        if ($l == Letter::dayOfYear) {
+            return pad($d->ordinal() as int64, $n as usize);
+        }
+
+        // E, e, c
+        if (($l == Letter::localWeekday || $l == Letter::localWeekdayAlone) && $n <= 2) {
+            int64 $local = $this->rule->firstDay->until($d->weekday()) + 1;
+            return pad($local, $n as usize);
+        }
+
+        return $names->weekdayNames($n)[($d->weekday()->number() - 1) as usize];
+    }
+
+    private static function timeField(const Token& $t, const Time& $time, Locale $names) : string
+    {
+        Letter $l = $t->letter;
+        usize $n = $t->count as usize;
+        int64 $hour = $time->hour as int64;
+
+        if ($l == Letter::dayPeriod) {
+            if ($hour < 12) {
+                return $names->dayPeriods[0];
+            }
+
+            return $names->dayPeriods[1];
+        }
+
+        if ($l == Letter::hour) {
+            return pad($hour, $n);
+        }
+
+        if ($l == Letter::hour24) {
+            if ($hour == 0) {
+                return pad(24, $n);
+            }
+
+            return pad($hour, $n);
+        }
+
+        if ($l == Letter::hour12) {
+            int64 $h = $hour % 12;
+
+            if ($h == 0) {
+                $h = 12;
+            }
+
+            return pad($h, $n);
+        }
+
+        if ($l == Letter::hour11) {
+            return pad($hour % 12, $n);
+        }
+
+        if ($l == Letter::minute) {
+            return pad($time->minute as int64, $n);
+        }
+
+        if ($l == Letter::second) {
+            return pad($time->second as int64, $n);
+        }
+
+        // S: the leading digits of the nine-digit fraction
+        string $digits = pad($time->nanosecond as int64, 9);
+        return string::from($digits->sub(0, $n));
+    }
+
+    private static function zoneField(const Token& $t, const Offset& $o, const Moment& $m) : string
+    {
+        Letter $l = $t->letter;
+        int32 $n = $t->count;
+
+        if ($l == Letter::zoneId || ($l == Letter::zoneName && $n == 4)) {
+            Zone $zone = guard $m->zone else {
+                return str::from($o);
+            };
+
+            return $zone->id;
+        }
+
+        if ($l == Letter::zoneName) {
+            Zone $zone = guard $m->zone else {
+                return str::from($o);
+            };
+
+            time::timestamp $at = guard $m->instant else {
+                return str::from($o);
+            };
+
+            return $zone->abbreviation($at);
+        }
+
+        if ($l == Letter::offsetGmt) {
+            if ($o->seconds == 0) {
+                return 'GMT';
+            }
+
+            if ($n == 4) {
+                return str::concat('GMT', $o->text(true, false));
+            }
+
+            return str::concat('GMT', $o->short());
+        }
+
+        if ($l == Letter::offset) {
+            if ($n == 4) {
+                if ($o->seconds == 0) {
+                    return 'GMT';
+                }
+
+                return str::concat('GMT', $o->text(true, false));
+            }
+
+            if ($n == 5) {
+                if ($o->seconds == 0) {
+                    return 'Z';
+                }
+
+                return $o->text(true, false);
+            }
+
+            return $o->text(false, false);
+        }
+
+        // X writes Z for zero, x never does
+        if ($l == Letter::offsetZ && $o->seconds == 0) {
+            return 'Z';
+        }
+
+        if ($n == 1) {
+            if ($o->seconds % 3600 == 0) {
+                return string::from($o->text(false, true)->sub(0, 3));
+            }
+
+            return $o->text(false, true);
+        }
+
+        if ($n == 2 || $n == 4) {
+            return $o->text(false, $n != 2);
+        }
+
+        return $o->text(true, $n != 3);
+    }
+
+    private static function year(int64 $year, int32 $count) : string
+    {
+        if ($count == 2) {
+            return pad(floorMod($year, 100), 2);
+        }
+
+        return pad($year, $count as usize);
+    }
+}

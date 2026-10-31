@@ -1,0 +1,125 @@
+use calendar::{Week, Format, FormatError, Locale, Date, Time, DateTime, Zoned, Zone, Offset, Month, WeekRule, Calendar, FixedClock};
+use std::time;
+
+function zurichAt(int64 $secs) : Zoned
+{
+    return Zoned(time::timestamp::from_unix_secs($secs), Zone(named: 'Europe/Zurich'));
+}
+
+test format_date_letters
+{
+    $d = Date(2026, .october, 28);
+    assert($d->format('dd.MM.yyyy') == '28.10.2026');
+    assert($d->format('d/M/yy') == '28/10/26');
+    assert($d->format('EEEE, d. MMMM y') == 'Wednesday, 28. October 2026');
+    assert($d->format('EEE MMM d') == 'Wed Oct 28');
+    assert($d->format('EEEEE MMMMM') == 'W O');
+    assert($d->format('QQQ QQQQ Q') == 'Q4 4th quarter 4');
+    assert($d->format('D DDD') == '301 301');
+    assert($d->format("YYYY-'W'ww-e") == '2026-W44-3');
+    assert($d->format("'year' yyyy, '''quoted'''") == "year 2026, 'quoted'");
+    assert($d->format("dd''MM") == "28'10");
+    assert(Date(-44, .march, 15)->format('d MMM y G') == '15 Mar 45 BC');
+    assert(Date(-44, .march, 15)->format('uuuu-MM-dd') == '-0044-03-15');
+    assert(Date(2021, .january, 3)->format("YYYY 'W'ww") == '2020 W53');
+    $us = Format('w');
+    assert(Date(2026, .january, 1)->format($us->weeks(WeekRule(.sunday, 1))) == '1');
+    assert(Date(2026, .january, 1)->format($us) == '1');
+    assert(Date(2027, .january, 1)->format($us) == '53');
+}
+
+test format_time_letters
+{
+    $t = Time(14, 5, 9, 123456789);
+    assert($t->format('HH:mm:ss') == '14:05:09');
+    assert($t->format('h:mm a') == '2:05 PM');
+    assert(Time(0, 30)->format('hh:mm a') == '12:30 AM');
+    assert(Time(0, 30)->format('k') == '24');
+    assert(Time(12, 30)->format('K a') == '0 PM');
+    assert($t->format('ss.S ss.SSS ss.SSSSSSSSS') == '09.1 09.123 09.123456789');
+}
+
+test format_zone_letters
+{
+    $z = zurichAt(1793176200);
+    assert($z->format('yyyy-MM-dd HH:mm z') == '2026-10-28 09:30 CET');
+    assert($z->format('Z ZZZZ ZZZZZ') == '+0100 GMT+01:00 +01:00');
+    assert($z->format('X XX XXX x xxx') == '+01 +0100 +01:00 +01 +01:00');
+    assert($z->format('O OOOO') == 'GMT+1 GMT+01:00');
+    assert($z->format('VV zzzz') == 'Europe/Zurich Europe/Zurich');
+    $utc = $z->to(Zone::utc());
+    assert($utc->format('X xxx ZZZZZ') == 'Z +00:00 Z');
+    $india = $z->to(Zone(offset: Offset(hours: 5, 30)));
+    assert($india->format('X O') == '+0530 GMT+5:30');
+}
+
+test format_interpolation_specs
+{
+    $d = Date(2026, .october, 28);
+    assert("{$d:dd.MM.yyyy}" == '28.10.2026');
+    $z = zurichAt(1793176200);
+    assert("{$z:EEE, d MMM yyyy HH:mm}" == 'Wed, 28 Oct 2026 09:30');
+    $dt = DateTime(2026, .october, 28, 9, 30);
+    assert("{$dt:yyyy-MM-dd'T'HH:mm}" == '2026-10-28T09:30');
+}
+
+test format_presets
+{
+    $z = zurichAt(1793176200);
+    assert($z->format(Format::rfc3339()) == '2026-10-28T09:30:00+01:00');
+    assert($z->format(Format::rfc2822()) == 'Wed, 28 Oct 2026 09:30:00 +0100');
+    assert($z->format(Format::http()) == 'Wed, 28 Oct 2026 08:30:00 GMT');
+}
+
+test format_locales
+{
+    $d = Date(2026, .march, 4);
+    assert($d->format('EEEE, d. MMMM yyyy', Locale::de()) == 'Mittwoch, 4. März 2026');
+    assert($d->format('EEE d MMM', Locale::de()) == 'Mi. 4 März');
+    assert($d->format('EEEE d MMMM yyyy', Locale::fr()) == 'mercredi 4 mars 2026');
+    assert($d->format('EEEE d MMMM yyyy', Locale::it()) == 'mercoledì 4 marzo 2026');
+    assert($d->format('LLL', Locale::de()) == 'Mär');
+    $cal = Calendar($zone: Zone::utc(), $locale: Locale::de(), $clock: FixedClock(time::timestamp::from_unix_secs(0)));
+    assert(str::from($cal->format($d, 'd. MMMM')) == '4. März');
+    Locale $ch = guard Locale::of('de-CH');
+    assert($ch->id == 'de');
+    Locale $gb = guard Locale::of('en_GB');
+    assert($gb->weekRule->firstDay == calendar::Weekday::monday);
+    assert(Locale::of('nl') == null);
+}
+
+test format_errors_explain_the_trap
+{
+    assert(str::from(Format::of('YYYY-MM-dd')->failure()) == "'Y' is the week-based year and the pattern has no week 'w'; did you mean 'y'? at byte 0");
+    assert(str::from(Format::of('yyyy-MM-DD')->failure()) == "'D' is the day of the year; did you mean 'd'? at byte 8");
+    assert(str::from(Format::of('yyyy-mm-dd')->failure()) == "'m' is minutes and the pattern has no hour; did you mean 'M'? at byte 5");
+    assert(str::from(Format::of('hh:mm')->failure()) == "'h' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte 0");
+    assert(str::from(Format::of("yyyy-'W'ww")->failure()) == "'w' counts weeks of the week-based year; pair it with 'Y', not 'y', at byte 8");
+    assert(str::from(Format::of('yyyy-MM-dd T')->failure()) == "'T' is not a pattern letter; quote literal text like 'this', at byte 11");
+    assert(str::from(Format::of("HH 'oops")->failure()) == 'a quote is never closed, from byte 3');
+    assert(str::from(Format::of('ddd')->failure()) == "too many 'd' in a row at byte 0");
+    assert(Format::of('mm:ss')->has_value());
+    assert(Format::of('')->failed());
+}
+
+test format_carries_its_locale
+{
+    $d = Date(2026, .march, 4);
+    $de = Format('EEEE d. MMMM')->locale(Locale::de());
+    assert($d->format($de) == 'Mittwoch 4. März');
+    assert($de->render(DateTime(2026, .march, 4, 9)) == 'Mittwoch 4. März');
+    Date $back = guard Date::parse('Mittwoch 4. März 2026', Format('EEEE d. MMMM yyyy')->locale(Locale::de()));
+    assert($back == $d);
+    assert($d->format(Format('MMMM')) == 'March');
+}
+
+test calendar_fills_in_pattern_strings_only
+{
+    // 2027-01-01 is a Friday: week 53 of 2026 for ISO, week 1 of 2027 when weeks start on Sunday
+    $d = Date(2027, .january, 1);
+    $us = Calendar($zone: Zone::utc(), $locale: Locale::de(), $weekRule: WeekRule(.sunday, 1), $clock: FixedClock(time::timestamp::from_unix_secs(0)));
+    assert($us->format($d, "Y-'W'w MMMM") == '2027-W1 Januar');
+    assert($us->week($d) == Week(2027, 1));
+    assert($us->format($d, Format("Y-'W'w MMMM")) == '2026-W53 January');
+    assert(Calendar($zone: Zone::utc())->week($d) == Week(2026, 53));
+}

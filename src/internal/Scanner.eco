@@ -1,0 +1,143 @@
+namespace calendar;
+
+/**
+ * A strict cursor over text being parsed. It never skips anything on its own: whitespace,
+ * case and signs are the caller's decision.
+ */
+internal struct Scanner
+{
+    internal const string $text;
+    internal usize $at = 0;
+
+    internal const function done() : bool
+    {
+        return $this->at >= $this->text->size();
+    }
+
+    /**
+     * The next byte, or 0 at the end.
+     */
+    internal const function peek() : uint8
+    {
+        if ($this->done()) {
+            return 0;
+        }
+
+        return $this->text->byte($this->at);
+    }
+
+    /**
+     * Consume `$byte` if it is next.
+     */
+    internal function eat(uint8 $byte) : bool
+    {
+        if ($this->peek() != $byte || $this->done()) {
+            return false;
+        }
+
+        $this->at = $this->at + 1;
+        return true;
+    }
+
+    /**
+     * True when `$word` is next, ignoring ASCII case. Nothing is consumed.
+     */
+    internal const function sees(const string& $word) : bool
+    {
+        usize $n = $word->size();
+
+        if ($n == 0 || $this->at + $n > $this->text->size()) {
+            return false;
+        }
+
+        return str::iequals($this->text->sub($this->at, $n), $word->view());
+    }
+
+    /**
+     * Consume `$word` if it is next, ignoring ASCII case.
+     */
+    internal function word(const string& $word) : bool
+    {
+        if (!$this->sees($word)) {
+            return false;
+        }
+
+        $this->at = $this->at + $word->size();
+        return true;
+    }
+
+    /**
+     * Consume the longest of `$names` that is next, ignoring ASCII case, and return its index.
+     * Null when none is.
+     */
+    internal function name(const array<string>& $names) : int64?
+    {
+        int64 $best = -1;
+        usize $length = 0;
+
+        foreach ($names as $i => const &$name) {
+            if ($name->size() > $length && $this->sees($name)) {
+                $best = $i as int64;
+                $length = $name->size();
+            }
+        }
+
+        if ($best < 0) {
+            return null;
+        }
+
+        $this->at = $this->at + $length;
+        return $best;
+    }
+
+    /**
+     * Read `$min` to `$max` ASCII digits, as many as are there. Null when fewer than `$min`
+     * digits follow; nothing is consumed then.
+     */
+    internal function digits(int32 $min, int32 $max) : int64?
+    {
+        usize $start = $this->at;
+        int64 $value = 0;
+        int32 $count = 0;
+
+        while ($count < $max && !$this->done()) {
+            uint8 $c = $this->peek();
+
+            if ($c < 48 || $c > 57) {
+                break;
+            }
+
+            $value = $value * 10 + (($c - 48) as int64);
+            $this->at = $this->at + 1;
+            $count++;
+        }
+
+        if ($count < $min) {
+            $this->at = $start;
+            return null;
+        }
+
+        return $value;
+    }
+
+    /**
+     * Read a fraction of a second after its separator: `$min` to `$max` digits, at most 9,
+     * scaled to nanoseconds. `5` is 500000000. Null when too few digits follow.
+     */
+    internal function fraction(int32 $min = 1, int32 $max = 9) : int64?
+    {
+        usize $start = $this->at;
+        int64 $value = guard $this->digits($min, $max) else {
+            return null;
+        };
+
+        usize $read = $this->at - $start;
+
+        while ($read < 9) {
+            $value = $value * 10;
+            $read = $read + 1;
+        }
+
+        return $value;
+    }
+}

@@ -1,0 +1,88 @@
+/**
+ * Integer helpers and the limits every type in the library shares.
+ *
+ * Calendar maths wants floor division: day -1 is in the week before day 0, not in it. Echo's
+ * `/` and `%` truncate toward zero like the hardware does, so these two do the correction.
+ */
+
+namespace calendar;
+
+internal const int64 MIN_YEAR = -9999;
+internal const int64 MAX_YEAR = 9999;
+
+// epoch days of -9999-01-01 and 9999-12-31
+internal const int64 MIN_DAY = -4371587;
+internal const int64 MAX_DAY = 2932896;
+
+internal const int64 SECS_PER_MINUTE = 60;
+internal const int64 SECS_PER_HOUR = 3600;
+internal const int64 SECS_PER_DAY = 86400;
+internal const int64 NANOS_PER_MICRO = 1000;
+internal const int64 NANOS_PER_MILLI = 1000000;
+internal const int64 NANOS_PER_SEC = 1000000000;
+internal const int64 NANOS_PER_MINUTE = 60000000000;
+internal const int64 NANOS_PER_HOUR = 3600000000000;
+internal const int64 NANOS_PER_DAY = 86400000000000;
+
+internal function floorDiv(int64 $a, int64 $b) : int64
+{
+    int64 $q = $a / $b;
+
+    if (($a % $b != 0) && (($a < 0) != ($b < 0))) {
+        $q = $q - 1;
+    }
+
+    return $q;
+}
+
+internal function floorMod(int64 $a, int64 $b) : int64
+{
+    return $a - floorDiv($a, $b) * $b;
+}
+
+internal function sign64(int64 $v) : int64
+{
+    if ($v < 0) {
+        return -1;
+    }
+
+    if ($v > 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * A decimal number zero padded to at least `$width` digits. The sign goes in front of the
+ * padding, so -44 at width 4 is `-0044`.
+ */
+internal function pad(int64 $value, usize $width) : string
+{
+    if ($value < 0) {
+        return str::concat('-', str::lpad(str::from(-$value), $width, 48));
+    }
+
+    return str::lpad(str::from($value), $width, 48);
+}
+
+/**
+ * The fraction of a second as digits, in groups of three: 500000000 is `5`00, written `500`,
+ * and 1500 is `000001500`. Empty for zero.
+ */
+internal function fraction(int64 $nanos) : string
+{
+    if ($nanos == 0) {
+        return '';
+    }
+
+    if ($nanos % NANOS_PER_MILLI == 0) {
+        return pad($nanos / NANOS_PER_MILLI, 3);
+    }
+
+    if ($nanos % NANOS_PER_MICRO == 0) {
+        return pad($nanos / NANOS_PER_MICRO, 6);
+    }
+
+    return pad($nanos, 9);
+}

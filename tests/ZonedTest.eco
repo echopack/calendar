@@ -1,0 +1,149 @@
+use calendar::{Zone, Zoned, Offset, Date, Time, DateTime, Month, Period, Unit, Rounding, Overflow, Disambiguation, Interval, Calendar, ManualClock, FixedClock, DateError, ParseError};
+use std::time;
+
+function zurich() : Zone
+{
+    return Zone(named: 'Europe/Zurich');
+}
+
+test zoned_basics
+{
+    $z = Zoned(time::timestamp::from_unix_secs(1793176200), zurich());
+    assert(str::from($z) == '2026-10-28T09:30:00+01:00[Europe/Zurich]');
+    assert($z->date == Date(2026, .october, 28));
+    assert($z->time == Time(9, 30));
+    $newYork = Zone(named: 'America/New_York');
+    $ny = $z->to($newYork);
+    assert(str::from($ny) == '2026-10-28T04:30:00-04:00[America/New_York]');
+    assert($ny->instant == $z->instant);
+    assert($ny != $z);
+    assert(!($ny < $z) && !($z < $ny));
+}
+
+test zoned_dst_resolution
+{
+    $zone = zurich();
+    $gap = DateTime(2026, .march, 29, 2, 30);
+    assert(str::from($gap->at($zone)) == '2026-03-29T03:30:00+02:00[Europe/Zurich]');
+    Zoned $early = guard $gap->resolve($zone, .earlier);
+    assert(str::from($early) == '2026-03-29T01:30:00+01:00[Europe/Zurich]');
+    $rejected = $gap->resolve($zone, .reject);
+    assert(str::from($rejected->failure()) == 'that wall-clock time is skipped in Europe/Zurich');
+
+    $twice = DateTime(2026, .october, 25, 2, 30);
+    assert(str::from($twice->at($zone)) == '2026-10-25T02:30:00+02:00[Europe/Zurich]');
+    Zoned $late = guard $twice->resolve($zone, .later);
+    assert(str::from($late) == '2026-10-25T02:30:00+01:00[Europe/Zurich]');
+    assert($twice->resolve($zone, .reject)->failed());
+}
+
+test zoned_day_versus_24_hours
+{
+    $before = DateTime(2026, .march, 28, 9)->at(zurich());
+    assert(str::from($before + Period::days(1)) == '2026-03-29T09:00:00+02:00[Europe/Zurich]');
+    assert(str::from($before + time::duration::hours(24)) == '2026-03-29T10:00:00+02:00[Europe/Zurich]');
+    assert(str::from($before + Period::hours(24)) == '2026-03-29T10:00:00+02:00[Europe/Zurich]');
+
+    $autumn = DateTime(2026, .october, 24, 9)->at(zurich());
+    assert(str::from($autumn + Period::days(1)) == '2026-10-25T09:00:00+01:00[Europe/Zurich]');
+    assert(str::from($autumn + time::duration::hours(24)) == '2026-10-25T08:00:00+01:00[Europe/Zurich]');
+}
+
+test zoned_spans_and_starts
+{
+    $short = DateTime(2026, .march, 29, 12)->at(zurich());
+    assert($short->span(.day)->duration() == time::duration::hours(23));
+    $long = DateTime(2026, .october, 25, 12)->at(zurich());
+    assert($long->span(.day)->duration() == time::duration::hours(25));
+    assert(str::from($long->start(.day)) == '2026-10-25T00:00:00+02:00[Europe/Zurich]');
+    assert(str::from($long->start(.month)) == '2026-10-01T00:00:00+02:00[Europe/Zurich]');
+    assert(str::from($long->span(.day)) == '[2026-10-24T22:00:00Z, 2026-10-25T23:00:00Z)');
+
+    // the second 02:30 stays on its side of the change when truncated to the hour
+    Zoned $second = guard DateTime(2026, .october, 25, 2, 30)->resolve(zurich(), .later);
+    assert(str::from($second->start(.hour)) == '2026-10-25T02:00:00+01:00[Europe/Zurich]');
+    assert(str::from($second->round(.day)) == '2026-10-25T00:00:00+02:00[Europe/Zurich]');
+}
+
+test zoned_until
+{
+    $a = DateTime(2026, .march, 28, 9)->at(zurich());
+    $b = DateTime(2026, .march, 30, 9)->at(zurich());
+    assert($a->until($b) == Period::days(2));
+    assert($a->until($b, .day) == 2);
+    assert($a->until($b, .hour) == 47);
+    assert($b - $a == time::duration::hours(47));
+    assert($b->until($a, .day) == -2);
+
+    $c = DateTime(2026, .january, 31, 22)->at(zurich());
+    $d = DateTime(2026, .march, 31, 6)->at(zurich());
+    $p = $c->until($d);
+    assert($c + $p == $d);
+    assert($c->until($d, .month) == 1);
+    assert($c->until($d, .month, .halfExpand) == 2);
+}
+
+test zoned_parse
+{
+    Zoned $a = guard Zoned::parse('2026-10-28T09:30:00+01:00[Europe/Zurich]');
+    assert($a->instant == time::timestamp::from_unix_secs(1793176200));
+    Zoned $b = guard Zoned::parse('2026-10-28T08:30:00Z');
+    assert($b->instant == $a->instant);
+    assert($b->zone->id == '+00:00');
+    Zoned $c = guard Zoned::parse('2026-10-28T09:30[Europe/Zurich]');
+    assert($c == $a);
+    Zoned $d = guard Zoned::parse('2026-10-28T09:30:00+01:00[!Europe/Zurich][u-ca=iso8601]');
+    assert($d == $a);
+    Zoned $e = guard Zoned::parse(str::from($a));
+    assert($e == $a);
+
+    assert(str::from(Zoned::parse('2026-10-28T09:30:00+02:00[Europe/Zurich]')->failure()) == 'the offset does not match the zone at byte 19');
+    assert(Zoned::parse('2026-10-28T09:30:00[Nowhere/Atlantis]')->failed());
+    assert(Zoned::parse('2026-10-28T09:30:00')->failed());
+    assert(Zoned::parse('2026-10-28T09:30:00+01:00[Europe/Zurich][!x-foo=bar]')->failed());
+}
+
+test calendar_with_manual_clock
+{
+    $clock = ManualClock(time::timestamp::from_unix_secs(1793176200));
+    $cal = Calendar($zone: zurich(), $clock: $clock);
+    assert(str::from($cal->now()) == '2026-10-28T09:30:00+01:00[Europe/Zurich]');
+    assert($cal->today() == Date(2026, .october, 28));
+    $clock->advance(time::duration::hours(15));
+    assert($cal->today() == Date(2026, .october, 29));
+
+    Zone $ny = guard $cal->zone('America/New_York');
+    assert($ny->id == 'America/New_York');
+    Zoned $parsed = guard $cal->parse('2026-10-28T09:30:00+01:00[Europe/Zurich]');
+    assert($parsed->date == Date(2026, .october, 28));
+
+    $fixed = Calendar($zone: Zone::utc(), $clock: FixedClock(time::timestamp::from_unix_secs(0)));
+    assert($fixed->today() == Date(1970, .january, 1));
+}
+
+test interval_basics
+{
+    $i = Interval(from: time::timestamp::from_unix_secs(0), until: time::timestamp::from_unix_secs(100));
+    assert($i->has(time::timestamp::from_unix_secs(0)));
+    assert(!$i->has(time::timestamp::from_unix_secs(100)));
+    $j = Interval(from: time::timestamp::from_unix_secs(50), until: time::timestamp::from_unix_secs(150));
+    Interval $k = guard $i->intersect($j);
+    assert($k->duration() == time::duration::secs(50));
+}
+
+test zoned_with
+{
+    $z = Zoned(time::timestamp::from_unix_secs(1793176200), zurich());
+    assert(str::from($z->with($hour: 17)) == '2026-10-28T17:30:00+01:00[Europe/Zurich]');
+    assert(str::from($z->with($month: .july)) == '2026-07-28T09:30:00+02:00[Europe/Zurich]');
+
+    // into the skipped hour: forward by the gap
+    $spring = DateTime(2026, .march, 29, 9)->at(zurich());
+    assert(str::from($spring->with($hour: 2, $minute: 30)) == '2026-03-29T03:30:00+02:00[Europe/Zurich]');
+
+    // inside the repeated hour each side stays on its side
+    $first = DateTime(2026, .october, 25, 2, 10)->at(zurich());
+    Zoned $second = guard DateTime(2026, .october, 25, 2, 10)->resolve(zurich(), .later);
+    assert(str::from($first->with($minute: 45)) == '2026-10-25T02:45:00+02:00[Europe/Zurich]');
+    assert(str::from($second->with($minute: 45)) == '2026-10-25T02:45:00+01:00[Europe/Zurich]');
+}

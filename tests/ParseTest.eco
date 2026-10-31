@@ -1,0 +1,136 @@
+use calendar::{Format, Locale, Date, Time, DateTime, Zoned, Zone, Offset, Month, WeekRule, Calendar, FixedClock, ParseError};
+use std::time;
+
+test parse_date_patterns
+{
+    Date $a = guard Date::parse('28.10.2026', Format('dd.MM.yyyy'));
+    assert($a == Date(2026, .october, 28));
+    Date $b = guard Date::parse('3/7/26', Format('d/M/yy'));
+    assert($b == Date(2026, .july, 3));
+    Date $c = guard Date::parse('Wednesday, 28 October 2026', Format('EEEE, d MMMM yyyy'));
+    assert($c == Date(2026, .october, 28));
+    Date $d = guard Date::parse('wed 28 OCT 2026', Format('EEE d MMM yyyy'));
+    assert($d == Date(2026, .october, 28));
+    Date $e = guard Date::parse('2026-301', Format('yyyy-DDD'));
+    assert($e == Date(2026, .october, 28));
+    Date $f = guard Date::parse('2020-W53-7', Format("YYYY-'W'ww-e"));
+    assert($f == Date(2021, .january, 3));
+    Date $g = guard Date::parse('15 Mar 44 BC', Format('d MMM y G'));
+    assert($g == Date(-43, .march, 15));
+    Date $h = guard Date::parse('20261028', Format('yyyyMMdd'));
+    assert($h == Date(2026, .october, 28));
+}
+
+test parse_date_locales
+{
+    Date $de = guard Date::parse('Mittwoch, 4. März 2026', Format('EEEE, d. MMMM yyyy')->locale(Locale::de()));
+    assert($de == Date(2026, .march, 4));
+    Date $fr = guard Date::parse('4 févr. 2026', Format('d MMM yyyy')->locale(Locale::fr()));
+    assert($fr == Date(2026, .february, 4));
+    Date $it = guard Date::parse('domenica 1 marzo 2026', Format('EEEE d MMMM yyyy')->locale(Locale::it()));
+    assert($it == Date(2026, .march, 1));
+}
+
+test parse_is_strict
+{
+    assert(str::from(Date::parse('2026-10', Format('yyyy-MM'))->failure()) == 'the text has no day');
+    assert(str::from(Date::parse('10-28', Format('MM-dd'))->failure()) == 'the text has no year');
+    assert(str::from(Date::parse('2026-02-30', Format('yyyy-MM-dd'))->failure()) == '2026-02 has no day 30');
+    assert(str::from(Date::parse('2026-13-01', Format('yyyy-MM-dd'))->failure()) == 'month 13 at byte 5 is out of range');
+    assert(str::from(Date::parse('28.10.2026!', Format('dd.MM.yyyy'))->failure()) == 'unexpected text at byte 10');
+    assert(str::from(Date::parse('28/10/2026', Format('dd.MM.yyyy'))->failure()) == "expected '.' at byte 2");
+    assert(str::from(Date::parse('Monday 28.10.2026', Format('EEEE dd.MM.yyyy'))->failure()) == 'weekday does not match the rest of the text');
+    assert(str::from(Date::parse('Octember 2026', Format('MMMM yyyy'))->failure()) == 'expected a month name at byte 0');
+    assert(Date::parse('8.10.2026', Format('dd.MM.yyyy'))->failed());
+}
+
+test parse_times
+{
+    Time $a = guard Time::parse('2:05 PM', Format('h:mm a'));
+    assert($a == Time(14, 5));
+    Time $b = guard Time::parse('12:30 am', Format('hh:mm a'));
+    assert($b == Time(0, 30));
+    Time $c = guard Time::parse('14:05:09.125', Format('HH:mm:ss.SSS'));
+    assert($c == Time(14, 5, 9, 125000000));
+    Time $d = guard Time::parse('14', Format('HH'));
+    assert($d == Time(14));
+    assert(str::from(Time::parse('2:05', Format('h:mm a'))->failure()) == "expected ' ' at byte 4");
+    assert(str::from(Time::parse('09:00 PM', Format('HH:mm a'))->failure()) == 'day period does not match the rest of the text');
+    assert(str::from(Time::parse('05', Format('mm'))->failure()) == 'the text has no hour');
+}
+
+test parse_datetimes_and_zoned
+{
+    DateTime $a = guard DateTime::parse('28.10.2026 09:30', Format('dd.MM.yyyy HH:mm'));
+    assert($a == DateTime(2026, .october, 28, 9, 30));
+
+    Zoned $b = guard Zoned::parse('2026-10-28 09:30 Europe/Zurich', Format('yyyy-MM-dd HH:mm VV'));
+    assert(str::from($b) == '2026-10-28T09:30:00+01:00[Europe/Zurich]');
+    Zoned $c = guard Zoned::parse('Wed, 28 Oct 2026 08:30:00 GMT', Format::http());
+    assert($c->instant == $b->instant);
+    Zoned $d = guard Zoned::parse('Wed, 28 Oct 2026 09:30:00 +0100', Format::rfc2822());
+    assert($d->instant == $b->instant);
+    Zoned $e = guard Zoned::parse('2026-10-28T09:30:00+01:00', Format::rfc3339());
+    assert($e->instant == $b->instant);
+    Zoned $f = guard Zoned::parse('2026-10-28 09:30 GMT+1', Format('yyyy-MM-dd HH:mm O'));
+    assert($f->instant == $b->instant);
+    assert(str::from(Zoned::parse('2026-10-28 09:30 +02:00 Europe/Zurich', Format('yyyy-MM-dd HH:mm XXX VV'))->failure()) == 'the offset does not match the zone at byte 17');
+    assert(str::from(Zoned::parse('2026-10-28 09:30', Format('yyyy-MM-dd HH:mm'))->failure()) == 'the text has no zone');
+    assert(Zoned::parse('2026-10-28 09:30 CET', Format('yyyy-MM-dd HH:mm z'))->failed());
+
+    $zurich = Zone(named: 'Europe/Zurich');
+    $cal = Calendar($zone: $zurich, $locale: Locale::de(), $clock: FixedClock(time::timestamp::from_unix_secs(0)));
+    Zoned $g = guard $cal->parse('28. Oktober 2026 09:30', 'd. MMMM yyyy HH:mm');
+    assert($g->instant == $b->instant);
+}
+
+test format_parse_round_trip
+{
+    array<string> $patterns = [
+        'yyyy-MM-dd HH:mm:ss.SSSSSSSSS XXX VV',
+        'EEEE, d. MMMM y G, h:mm:ss a ZZZZZ VV',
+        "YYYY-'W'ww-e HH:mm:ss xx VV",
+        'uuuu-DDD HH:mm:ss OOOO VV',
+        'EEE, dd MMM yyyy HH:mm:ss Z VV',
+    ];
+    $zurich = Zone(named: 'Europe/Zurich');
+    array<Zoned> $moments = [
+        Zoned(time::timestamp::from_unix_secs(1793176200) + time::duration::nanos(123456789), $zurich),
+        Zoned(time::timestamp::from_unix_secs(1774746000), $zurich),
+        Zoned(time::timestamp::from_unix_secs(-2208988800), $zurich),
+        Zoned(time::timestamp::from_unix_secs(4128627600 - 1800), $zurich),
+    ];
+
+    foreach ($patterns as const &$p) {
+        $f = Format($p)->locale(Locale::fr());
+
+        foreach ($moments as const &$m) {
+            string $text = $f->render($m);
+            Zoned $back = guard Zoned::parse($text, $f);
+
+            if ($p->contains('SSSSSSSSS')) {
+                assert($back == $m);
+            } else {
+                assert($back->instant->unix_secs() == $m->instant->unix_secs());
+            }
+        }
+    }
+}
+
+test parse_two_digit_years
+{
+    Date $a = guard Date::parse('01.02.99', Format('dd.MM.yy'));
+    assert($a->year == 2099);
+    Date $b = guard Date::parse('01.02.99', Format('dd.MM.yy')->pivot(1950));
+    assert($b->year == 1999);
+    Date $c = guard Date::parse('01.02.26', Format('dd.MM.yy')->pivot(1950));
+    assert($c->year == 2026);
+}
+
+test values_key_maps
+{
+    map<Date, string> $holidays = map<Date, string>();
+    $holidays[Date(2026, .august, 1)] = 'Bundesfeier';
+    assert($holidays[Date(2026, .august, 1)] == 'Bundesfeier');
+    assert(!$holidays->has(Date(2026, .august, 2)));
+}

@@ -1,0 +1,12 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * Where "now" comes from. A `Calendar` asks its clock and nothing else, so a test hands it a
+ * `FixedClock` or `ManualClock` and the code under test never knows.
+ */
+public interface Clock
+{
+    const function now() : time::timestamp;
+}

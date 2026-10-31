@@ -1,0 +1,130 @@
+namespace calendar;
+
+/**
+ * Zones read from the operating system's compiled zone files: `$TZDIR` when it is set,
+ * otherwise `/usr/share/zoneinfo`. The data is as fresh as the system's own updates.
+ *
+ * Loaded zones are cached per instance. The cache is not locked; give each thread its own
+ * source, or load what you need before sharing.
+ */
+public class SystemZones : ZoneSource
+{
+    public const string $dir;
+    private map<string, Zone> $cache;
+
+    constructor(string $dir)
+    {
+        $this->dir = $dir;
+        $this->cache = map<string, Zone>();
+    }
+
+    constructor()
+    {
+        $this->dir = SystemZones::defaultDir();
+        $this->cache = map<string, Zone>();
+    }
+
+    public function load(const string& $id) : result<Zone, ZoneError>
+    {
+        if ($this->cache->has($id)) {
+            return .ok($this->cache->get($id));
+        }
+
+        if (!SystemZones::valid($id)) {
+            return .error(.invalid($id));
+        }
+
+        string $bytes = guard std::io::readfile(std::env::join($this->dir, $id)) else ($e) {
+            if ($id == 'UTC') {
+                return .ok(Zone::utc());
+            }
+
+            if ($e->missing() || $e->not_a_directory()) {
+                return .error(.unknown($id));
+            }
+
+            return .error(.unreadable($id, $e->message()));
+        };
+
+        Zone $zone = guard Tzif::parse($id, $bytes) else ($e) {
+            return .error($e);
+        };
+
+        $this->cache->set($id, $zone);
+        return .ok($zone);
+    }
+
+    /**
+     * Zone names from the directory's `tzdata.zi` index, links included. Empty when the
+     * system ships no index.
+     */
+    public function ids() : array<string>
+    {
+        array<string> $out = [];
+        std::io::file $f = guard std::io::open(std::env::join($this->dir, 'tzdata.zi'), .read) else {
+            return $out;
+        };
+
+        foreach ($f as const &$line) {
+            if ($line->starts('Z ')) {
+                usize $end = $line->find(' ', 2);
+                $out[] = string::from($line->sub(2, $end - 2));
+            } else if ($line->starts('L ')) {
+                usize $space = $line->find(' ', 2);
+
+                if ($space < $line->size()) {
+                    $out[] = string::from($line->sub($space + 1, $line->size() - $space - 1));
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * True for a plausible zone name: relative, no `..` segment, only letters, digits and
+     * `/ _ - + .`. Checked before the name ever reaches the filesystem.
+     */
+    public static function valid(const string& $id) : bool
+    {
+        usize $n = $id->size();
+
+        if ($n == 0 || $n > 255 || $id->byte(0) == 47 || $id->byte(0) == 46) {
+            return false;
+        }
+
+        if ($id->contains('..') || $id->contains('//')) {
+            return false;
+        }
+
+        for ($i = 0; $i < $n; $i++) {
+            if (!SystemZones::idByte($id->byte($i))) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // a byte a zone name may hold: letters, digits and / _ - + .
+    internal static function idByte(uint8 $c) : bool
+    {
+        return ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122) || ($c >= 48 && $c <= 57)
+            || $c == 47 || $c == 95 || $c == 45 || $c == 43 || $c == 46;
+    }
+
+    private static function defaultDir() : string
+    {
+        string::view? $dir = std::env::var('TZDIR');
+
+        if ($dir != null) {
+            string::view $v = guard $dir;
+
+            if (!$v->empty()) {
+                return string::from($v);
+            }
+        }
+
+        return '/usr/share/zoneinfo';
+    }
+}

@@ -1,0 +1,110 @@
+namespace calendar;
+
+/**
+ * A pattern letter, backed by its ASCII code. `text` stands for a run of literal text.
+ */
+internal enum Letter : uint8
+{
+    case text = 0;
+    case era = 71;              // G
+    case year = 121;            // y
+    case weekYear = 89;         // Y
+    case signedYear = 117;      // u
+    case quarter = 81;          // Q
+    case quarterAlone = 113;    // q
+    case month = 77;            // M
+    case monthAlone = 76;       // L
+    case week = 119;            // w
+    case day = 100;             // d
+    case dayOfYear = 68;        // D
+    case weekday = 69;          // E
+    case localWeekday = 101;    // e
+    case localWeekdayAlone = 99; // c
+    case dayPeriod = 97;        // a
+    case hour12 = 104;          // h, 1-12
+    case hour = 72;             // H, 0-23
+    case hour11 = 75;           // K, 0-11
+    case hour24 = 107;          // k, 1-24
+    case minute = 109;          // m
+    case second = 115;          // s
+    case fraction = 83;         // S
+    case zoneName = 122;        // z
+    case offset = 90;           // Z
+    case offsetZ = 88;          // X
+    case offsetX = 120;         // x
+    case offsetGmt = 79;        // O
+    case zoneId = 86;           // V
+
+    /**
+     * True when a run of `$count` of this letter is a field.
+     */
+    internal const function allows(int32 $count) : bool
+    {
+        return match ($this) {
+            .offsetGmt => $count == 1 || $count == 4,
+            .zoneId => $count == 2,
+            else => $count <= $this->limit(),
+        };
+    }
+
+    // the longest run the letter allows
+    private const function limit() : int32
+    {
+        return match ($this) {
+            .text => 0,
+            .year => 9,
+            .weekYear => 9,
+            .signedYear => 9,
+            .fraction => 9,
+            .zoneName => 4,
+            .dayOfYear => 3,
+            .week => 2,
+            .day => 2,
+            .hour12 => 2,
+            .hour => 2,
+            .hour11 => 2,
+            .hour24 => 2,
+            .minute => 2,
+            .second => 2,
+            else => 5,
+        };
+    }
+
+    // y Y u Q q M L w d D E e c G
+    internal const function dated() : bool
+    {
+        return match ($this) {
+            .era => true,
+            .year => true,
+            .weekYear => true,
+            .signedYear => true,
+            .quarter => true,
+            .quarterAlone => true,
+            .month => true,
+            .monthAlone => true,
+            .week => true,
+            .day => true,
+            .dayOfYear => true,
+            .weekday => true,
+            .localWeekday => true,
+            .localWeekdayAlone => true,
+            else => false,
+        };
+    }
+
+    // a h H K k m s S
+    internal const function timed() : bool
+    {
+        return match ($this) {
+            .dayPeriod => true,
+            .hour12 => true,
+            .hour => true,
+            .hour11 => true,
+            .hour24 => true,
+            .minute => true,
+            .second => true,
+            .fraction => true,
+            else => false,
+        };
+    }
+}

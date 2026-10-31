@@ -1,0 +1,47 @@
+namespace calendar;
+
+/**
+ * Why text did not parse. Positions are byte offsets into the input.
+ */
+public enum ParseError
+{
+    /**
+     * Something else was needed at `$at`: a digit, a `-`, a month name.
+     */
+    case expected(usize $at, string $what);
+
+    /**
+     * A field parsed but its value is impossible: month 13 at byte 5.
+     */
+    case invalid(Field $field, int64 $value, usize $at);
+
+    /**
+     * The value parsed, then text was left over.
+     */
+    case trailing(usize $at);
+
+    /**
+     * The pattern never supplied a field the result needs: a date without a day.
+     */
+    case missing(Field $field);
+
+    /**
+     * The fields parsed but do not make a valid date or time together.
+     */
+    case impossible(DateError $reason);
+
+    /**
+     * A `[zone]` names no zone the source knows.
+     */
+    case unknownZone(string $id, usize $at);
+
+    /**
+     * The offset in the text disagrees with what the named zone says for that time.
+     */
+    case conflict(usize $at);
+
+    /**
+     * Two fields disagree: a weekday that is not the date's weekday, PM with hour 9.
+     */
+    case mismatch(Field $field);
+}

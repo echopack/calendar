@@ -1,0 +1,181 @@
+namespace calendar;
+
+/**
+ * The context dates are read in: a zone, a language, a week rule, a clock and a source of
+ * zone rules.
+ *
+ * There is no global default zone, locale or "now". Make one `Calendar` where the
+ * program starts and pass it to whatever needs today's date; a test passes one built with a
+ * `ManualClock` instead.
+ *
+ * ```echo
+ * $cal = Calendar($zone: Zone(named: 'Europe/Zurich'), $locale: Locale::de());
+ * Date $today = $cal->today();
+ * ```
+ *
+ * Pattern strings given to `format` and `parse` take this calendar's language and week rule.
+ * A compiled `Format` keeps its own.
+ */
+public class Calendar
+{
+    public const Zone $zone;
+    public const Locale $locale;
+    public const Clock $clock;
+    public const WeekRule $weekRule;
+
+    // zone sources cache what they load, so the calendar holds this one writable
+    private ZoneSource $source;
+
+    constructor(Zone $zone = Zone::local(), Locale $locale = Locale::en(), Clock $clock = SystemClock(), ZoneSource $zones = Zone::system(), WeekRule $weekRule = WeekRule::iso())
+    {
+        $this->zone = $zone;
+        $this->locale = $locale;
+        $this->clock = $clock;
+        $this->source = $zones;
+        $this->weekRule = $weekRule;
+    }
+
+    /**
+     * The current instant in this calendar's zone.
+     */
+    public function now() : Zoned
+    {
+        return Zoned($this->clock->now(), $this->zone);
+    }
+
+    /**
+     * Today's date in this calendar's zone.
+     */
+    public function today() : Date
+    {
+        return $this->now()->date;
+    }
+
+    /**
+     * The week `$date` falls in under this calendar's week rule.
+     */
+    public function week(const Date& $date) : Week
+    {
+        return $date->week($this->weekRule);
+    }
+
+    /**
+     * Where this calendar loads named zones from.
+     */
+    public function zones() : ZoneSource
+    {
+        return $this->source;
+    }
+
+    /**
+     * A zone by name from this calendar's source.
+     */
+    public function zone(const string& $id) : result<Zone, ZoneError>
+    {
+        return $this->source->load($id);
+    }
+
+    /**
+     * A wall clock in this calendar's zone, DST resolved compatibly.
+     */
+    public function at(const DateTime& $local) : Zoned
+    {
+        return $local->at($this->zone);
+    }
+
+    /**
+     * Parse RFC 9557 text with zones from this calendar's source.
+     */
+    public function parse(const string& $text) : result<Zoned, ParseError>
+    {
+        return Zoned::parse($text, $this->source);
+    }
+
+    /**
+     * Parse with a pattern, names in this calendar's language. Text without a zone or offset
+     * is read in this calendar's zone. A bad pattern stops the program.
+     */
+    public function parse(const string& $text, const string& $pattern) : result<Zoned, ParseError>
+    {
+        return Zoned::read($text, $this->compile($pattern), $this->source, $this->zone);
+    }
+
+    /**
+     * Parse with a compiled format, in its own language. Text without a zone or offset is
+     * read in this calendar's zone.
+     */
+    public function parse(const string& $text, const Format& $format) : result<Zoned, ParseError>
+    {
+        return Zoned::read($text, $format, $this->source, $this->zone);
+    }
+
+    /**
+     * Render with a pattern in this calendar's language and week rule. A bad pattern stops
+     * the program.
+     */
+    public function format(const Date& $date, const string& $pattern) : string
+    {
+        return $this->compile($pattern)->render($date);
+    }
+
+    public function format(const Time& $time, const string& $pattern) : string
+    {
+        return $this->compile($pattern)->render($time);
+    }
+
+    public function format(const DateTime& $dt, const string& $pattern) : string
+    {
+        return $this->compile($pattern)->render($dt);
+    }
+
+    public function format(const Zoned& $z, const string& $pattern) : string
+    {
+        return $this->compile($pattern)->render($z);
+    }
+
+    /**
+     * Render with a compiled format, which keeps its own language and week rule.
+     */
+    public function format(const Date& $date, const Format& $format) : string
+    {
+        return $format->render($date);
+    }
+
+    public function format(const Time& $time, const Format& $format) : string
+    {
+        return $format->render($time);
+    }
+
+    public function format(const DateTime& $dt, const Format& $format) : string
+    {
+        return $format->render($dt);
+    }
+
+    public function format(const Zoned& $z, const Format& $format) : string
+    {
+        return $format->render($z);
+    }
+
+    /**
+     * How far `$then` is from now, in this calendar's language: "3 days ago", "in 2 hours",
+     * "yesterday".
+     */
+    public function human(const Zoned& $then, Relative $style = Relative()) : string
+    {
+        return $style->render($then, $this->now(), $this->locale);
+    }
+
+    /**
+     * How far the day `$then` is from today: "tomorrow", "in 3 weeks".
+     */
+    public function human(const Date& $then, Relative $style = Relative()) : string
+    {
+        return $style->render($then, $this->today(), $this->locale);
+    }
+
+    // a pattern string in this calendar's language and week rule
+    private function compile(const string& $pattern) : Format
+    {
+        return Format($pattern)->locale($this->locale)->weeks($this->weekRule);
+    }
+}

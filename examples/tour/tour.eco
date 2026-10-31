@@ -1,0 +1,46 @@
+use calendar::{Calendar, Zone, Zoned, Date, Time, DateTime, Period, Locale, Format};
+use std::time;
+
+// the context: zone from this machine, German names
+$cal = Calendar($zone: Zone::local(), $locale: Locale::de());
+$now = $cal->now();
+$formatted = $cal->format($now, 'EEEE, d. MMMM yyyy, HH:mm z');
+$week = $cal->week($now->date);
+echo "now:       {$now}";
+echo "formatted: {$formatted}";
+echo "week:      {$week}";
+
+// a date with no zone, and month arithmetic that clamps
+$due = Date(2026, .january, 31);
+$next = $due + Period::months(1);
+echo "due:       {$due} -> {$next}";
+
+// a wall clock in a zone, across the spring DST change
+$meeting = DateTime(2026, .march, 28, 9, 0)->at(Zone(named: 'Europe/Zurich'));
+$dayLater = $meeting + Period::days(1);
+$hoursLater = $meeting + time::duration::hours(24);
+$evening = $meeting->with($hour: 17);
+echo "meeting:   {$meeting}";
+echo "+1 day:    {$dayLater}";
+echo "+24 hours: {$hoursLater}";
+echo "evening:   {$evening}";
+
+// differences
+$age = Date(1990, .march, 14)->until($cal->today())->human(Locale::de());
+$relative = $cal->human($meeting);
+echo "age:       {$age}";
+echo "relative:  {$relative}";
+
+// parsing, strictly
+$swiss = Format('dd.MM.yyyy');
+Date $parsed = guard Date::parse('01.08.2026', $swiss);
+$spoken = $cal->format($parsed, 'EEEE, d. MMMM');
+echo "parsed:    {$spoken}";
+
+$refused = Date::parse('2026-02', Format('yyyy-MM'))->failure();
+echo "refused:   {$refused}";
+
+// a month, half-open
+$october = Date(2026, .october, 1)->span(.month);
+$days = $october->count();
+echo "october:   {$october}, {$days} days";

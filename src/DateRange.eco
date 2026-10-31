@@ -1,0 +1,130 @@
+namespace calendar;
+
+/**
+ * The days from `$start` up to, not including, `$end`.
+ *
+ * Half-open, so October is `DateRange(from: Date(2026, .october, 1), until: Date(2026,
+ * .november, 1))` and two adjacent months share no day. When the last day is what you have,
+ * say so: `DateRange(from: $a, through: $b)` includes `$b`.
+ *
+ * `foreach` walks it a day at a time; `every()` steps by any period.
+ */
+public struct DateRange : contract::iterable<Date>, contract::const_iterable<Date>
+{
+    public const Date $start;
+    public const Date $end;
+
+    constructor(from: Date $start, until: Date $end)
+    {
+        if ($end < $start) {
+            die("calendar: a range cannot end before it starts");
+        }
+
+        $this->start = $start;
+        $this->end = $end;
+    }
+
+    constructor(from: Date $start, through: Date $last)
+    {
+        if ($last < $start) {
+            die("calendar: a range cannot end before it starts");
+        }
+
+        $this->start = $start;
+        $this->end = Date(epochDay: $last->epochDay() + 1);
+    }
+
+    /**
+     * True when `$date` is in the range.
+     */
+    public const function has(const Date& $date) : bool
+    {
+        return $date >= $this->start && $date < $this->end;
+    }
+
+    /**
+     * How many days the range holds.
+     */
+    public const function count() : int64
+    {
+        return $this->end->epochDay() - $this->start->epochDay();
+    }
+
+    public const function empty() : bool
+    {
+        return $this->start == $this->end;
+    }
+
+    /**
+     * The last day in the range, or null when it is empty.
+     */
+    public const function last() : Date?
+    {
+        if ($this->empty()) {
+            return null;
+        }
+
+        return Date(epochDay: $this->end->epochDay() - 1);
+    }
+
+    /**
+     * True when the two ranges share at least one day.
+     */
+    public const function overlaps(const DateRange& $other) : bool
+    {
+        return $this->start < $other->end && $other->start < $this->end;
+    }
+
+    /**
+     * The days both ranges hold, or null when they share none.
+     */
+    public const function intersect(const DateRange& $other) : DateRange?
+    {
+        if (!$this->overlaps($other)) {
+            return null;
+        }
+
+        Date $start = $this->start;
+        Date $end = $this->end;
+
+        if ($other->start > $start) {
+            $start = $other->start;
+        }
+
+        if ($other->end < $end) {
+            $end = $other->end;
+        }
+
+        return DateRange(from: $start, until: $end);
+    }
+
+    /**
+     * The dates `$start`, `$start + $step`, `$start + $step * 2` and on while they stay in the
+     * range. Each one is counted from the start, so monthly steps from January 31 give
+     * February 28 and then March 31, never drifting to the 28th.
+     */
+    public const function every(const Period& $step) : DateSteps
+    {
+        return DateSteps($this->start, $this->end, $step);
+    }
+
+    public function iterate() : DateCursor
+    {
+        return DateCursor($this->start, $this->end, Period::days(1));
+    }
+
+    public const function iterate() : DateCursor
+    {
+        return DateCursor($this->start, $this->end, Period::days(1));
+    }
+}
+
+operator (const DateRange& $a) == (const DateRange& $b) : bool
+{
+    return $a->start == $b->start && $a->end == $b->end;
+}
+
+operator (const DateRange& $a) != (const DateRange& $b) : bool
+{
+    return !($a == $b);
+}

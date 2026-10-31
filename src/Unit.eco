@@ -1,0 +1,158 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A unit to count, round or truncate in.
+ *
+ * Years, quarters and months are calendar units: their length depends on where they start.
+ * Weeks and everything below are exact on a wall clock. A day in a zone is a calendar unit
+ * again, because a DST change makes it 23 or 25 hours long; `Zoned` handles that.
+ */
+public enum Unit
+{
+    case year;
+    case quarter;
+    case month;
+    case week;
+    case day;
+    case hour;
+    case minute;
+    case second;
+    case millisecond;
+    case microsecond;
+    case nanosecond;
+
+    /**
+     * True for years, quarters and months, whose length depends on the start.
+     */
+    public const function calendar() : bool
+    {
+        return match ($this) {
+            .year => true,
+            .quarter => true,
+            .month => true,
+            else => false,
+        };
+    }
+
+    /**
+     * True for hours and smaller units, the ones a clock shows.
+     */
+    public const function clock() : bool
+    {
+        return match ($this) {
+            .year => false,
+            .quarter => false,
+            .month => false,
+            .week => false,
+            .day => false,
+            else => true,
+        };
+    }
+
+    /**
+     * The unit a phrase says: quarters are counted as months and anything below a second
+     * as seconds.
+     */
+    internal const function spoken() : Unit
+    {
+        return match ($this) {
+            .quarter => .month,
+            .millisecond => .second,
+            .microsecond => .second,
+            .nanosecond => .second,
+            else => $this,
+        };
+    }
+
+    /**
+     * `$n` of this unit as a period.
+     */
+    internal const function times(int64 $n) : Period
+    {
+        return match ($this) {
+            .year => Period::years($n),
+            .quarter => Period::months($n * 3),
+            .month => Period::months($n),
+            .week => Period::weeks($n),
+            .day => Period::days($n),
+            .hour => Period::hours($n),
+            .minute => Period::minutes($n),
+            .second => Period::seconds($n),
+            .millisecond => Period::nanoseconds($n * NANOS_PER_MILLI),
+            .microsecond => Period::nanoseconds($n * NANOS_PER_MICRO),
+            .nanosecond => Period::nanoseconds($n),
+        };
+    }
+
+    /**
+     * Months in one unit for the calendar units, 0 for the rest.
+     */
+    internal const function months() : int64
+    {
+        return match ($this) {
+            .year => 12,
+            .quarter => 3,
+            .month => 1,
+            else => 0,
+        };
+    }
+
+    /**
+     * The exact length in nanoseconds. Calendar units have none and stop the program.
+     */
+    internal const function nanos() : int64
+    {
+        return match ($this) {
+            .week => NANOS_PER_DAY * 7,
+            .day => NANOS_PER_DAY,
+            .hour => NANOS_PER_HOUR,
+            .minute => NANOS_PER_MINUTE,
+            .second => NANOS_PER_SEC,
+            .millisecond => NANOS_PER_MILLI,
+            .microsecond => NANOS_PER_MICRO,
+            .nanosecond => 1,
+            else => Unit::inexact($this),
+        };
+    }
+
+    private static function inexact(Unit $unit) : int64
+    {
+        die('calendar: years, quarters and months have no fixed length; count them on a date');
+    }
+
+    /**
+     * How many whole units fit in `$d`, rounded. Units of a second and up stay exact for any
+     * span the library can represent. Milli, micro and nano counts wrap past about 292 years
+     * of nanoseconds, the same bound as `duration::as_nanos()`.
+     */
+    internal const function count(const time::duration& $d, Rounding $mode) : int64
+    {
+        int64 $sign = 1;
+        time::duration $span = $d;
+
+        if ($d->is_negative()) {
+            $sign = -1;
+            $span = $d->abs();
+        }
+
+        int64 $secs = $span->as_secs();
+        int64 $nanos = $span->subsec_nanos() as int64;
+        int64 $length = $this->nanos();
+        int64 $whole = 0;
+        int64 $num = 0;
+        int64 $den = $length;
+
+        if ($length >= NANOS_PER_SEC) {
+            int64 $unitSecs = $length / NANOS_PER_SEC;
+            $whole = $secs / $unitSecs;
+            $num = ($secs % $unitSecs) * NANOS_PER_SEC + $nanos;
+        } else {
+            $whole = $secs * (NANOS_PER_SEC / $length) + $nanos / $length;
+            $num = $nanos % $length;
+        }
+
+        return $mode->apply($whole * $sign, $num * $sign, $den);
+    }
+}

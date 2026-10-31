@@ -1,0 +1,390 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A time zone: the rules that map an instant to the offset and wall clock in force there.
+ *
+ * Named zones (`Europe/Zurich`) come from a `ZoneSource` and follow the IANA history,
+ * including the future rule for years past the last listed change. A fixed zone holds one
+ * offset forever. Zones are shared, read-only objects; compare them by `$id`.
+ */
+public class Zone
+{
+    public const string $id;
+    private array<int64> $times;
+    private array<int32> $kinds;
+    private array<ZoneType> $types;
+    private PosixRule? $rule;
+
+    internal constructor(string $id, array<int64> $times, array<int32> $kinds, array<ZoneType> $types, PosixRule? $rule)
+    {
+        $this->id = $id;
+        $this->times = mv $times;
+        $this->kinds = mv $kinds;
+        $this->types = mv $types;
+        $this->rule = $rule;
+    }
+
+    /**
+     * A zone that is always `$offset`. Its id is the offset text, `+05:30`.
+     */
+    constructor(offset: Offset $offset)
+    {
+        $this->id = str::from($offset);
+        $this->times = [];
+        $this->kinds = [];
+        $this->types = [ZoneType($offset->seconds, false, str::from($offset))];
+        $this->rule = null;
+    }
+
+    /**
+     * A named zone written in code, `Zone(named: 'Europe/Zurich')`, from the operating
+     * system's zone files. A name the system does not know stops the program; names that
+     * arrive at runtime go through `Zone::named`, which returns a result.
+     */
+    constructor(named: string $id)
+    {
+        Zone $z = guard Zone::named($id) else ($e) {
+            die("calendar: {$e}");
+        };
+
+        $this->id = $z->id;
+        $this->times = $z->times;
+        $this->kinds = $z->kinds;
+        $this->types = $z->types;
+        $this->rule = $z->rule;
+    }
+
+    internal static Zone $utcZone = Zone('UTC', [], [], [ZoneType(0, false, 'UTC')], null);
+    internal static SystemZones $system = SystemZones();
+
+    /**
+     * The source `Zone::named` reads from: the operating system's zone files.
+     */
+    public static function system() : SystemZones
+    {
+        return Zone::$system;
+    }
+
+    public static function utc() : Zone
+    {
+        return Zone::$utcZone;
+    }
+
+    /**
+     * A named zone from the operating system's zone files. Use a `Calendar` with its own
+     * `ZoneSource` to read from anywhere else.
+     */
+    public static function named(const string& $id) : result<Zone, ZoneError>
+    {
+        return Zone::$system->load($id);
+    }
+
+    /**
+     * The zone this machine runs in: `$TZ` when set (a name, or a path to a zone file), then
+     * the zone `/etc/localtime` points at, then UTC.
+     */
+    public static function local() : Zone
+    {
+        string::view? $tz = std::env::var('TZ');
+
+        if ($tz != null) {
+            string::view $view = guard $tz;
+            string $name = string::from($view);
+
+            if ($name->starts(':')) {
+                $name = string::from($name->sub(1, $name->size() - 1));
+            }
+
+            if ($name->empty()) {
+                return Zone::utc();
+            }
+
+            if ($name->starts('/')) {
+                return Zone::file($name) ?? Zone::utc();
+            }
+
+            result<Zone, ZoneError> $named = Zone::named($name);
+
+            if ($named->has_value()) {
+                Zone $z = guard $named;
+                return $z;
+            }
+
+            PosixRule? $rule = PosixRule::parse($name);
+
+            if ($rule != null) {
+                PosixRule $r = guard $rule;
+                return Zone($name, [], [], [$r->standard], $r);
+            }
+
+            return Zone::utc();
+        }
+
+        return Zone::file('/etc/localtime') ?? Zone::utc();
+    }
+
+    // a zone file at an absolute path, named after its place under a zoneinfo directory
+    private static function file(const string& $path) : Zone?
+    {
+        string $id = 'localtime';
+        string $real = $path;
+        result<string, std::io::ioerror> $resolved = std::io::realpath($path);
+
+        if ($resolved->has_value()) {
+            string $r = guard $resolved;
+            $real = $r;
+        }
+
+        usize $at = $real->find('zoneinfo/');
+
+        if ($at < $real->size()) {
+            $id = string::from($real->sub($at + 9, $real->size() - $at - 9));
+            result<Zone, ZoneError> $named = Zone::named($id);
+
+            if ($named->has_value()) {
+                Zone $z = guard $named;
+                return $z;
+            }
+        }
+
+        string $bytes = guard std::io::readfile($real) else {
+            return null;
+        };
+
+        Zone $parsed = guard Tzif::parse($id, $bytes) else {
+            return null;
+        };
+
+        return $parsed;
+    }
+
+    /**
+     * True when the zone never changes its offset.
+     */
+    public const function fixed() : bool
+    {
+        return $this->times->empty() && $this->types->count() == 1 && $this->rule == null;
+    }
+
+    /**
+     * The offset from UTC in force at `$at`.
+     */
+    public const function offset(const time::timestamp& $at) : Offset
+    {
+        return Offset($this->type($at->unix_secs())->offset);
+    }
+
+    /**
+     * The abbreviation in force at `$at`, like `CET` or `CEST`. Some zones only have numeric
+     * ones (`+0330`).
+     */
+    public const function abbreviation(const time::timestamp& $at) : string
+    {
+        return $this->type($at->unix_secs())->abbr;
+    }
+
+    /**
+     * True when daylight saving time is in force at `$at`.
+     */
+    public const function dst(const time::timestamp& $at) : bool
+    {
+        return $this->type($at->unix_secs())->dst;
+    }
+
+    /**
+     * The next change of offset or abbreviation strictly after `$after`, or null when the
+     * zone has no more.
+     */
+    public const function next(const time::timestamp& $after) : time::timestamp?
+    {
+        int64 $secs = guard $this->nextSecs($after->unix_secs()) else {
+            return null;
+        };
+
+        return time::timestamp::from_unix_secs($secs);
+    }
+
+    /**
+     * The last change strictly before `$before`, or null when there was none.
+     */
+    public const function previous(const time::timestamp& $before) : time::timestamp?
+    {
+        int64 $secs = $before->unix_secs();
+
+        if ($before->since_epoch()->subsec_nanos() > 0) {
+            $secs = $secs + 1;
+        }
+
+        int64 $found = guard $this->previousSecs($secs) else {
+            return null;
+        };
+
+        return time::timestamp::from_unix_secs($found);
+    }
+
+    /**
+     * The offsets under which the wall clock `$local` happens here, earliest instant first.
+     * One for an ordinary time, two in the hour repeated when clocks go back, none in the
+     * hour skipped when they go forward.
+     */
+    public const function candidates(const DateTime& $local) : array<Offset>
+    {
+        int64 $wall = $local->wall();
+        int64 $limit = $wall + 108000;
+        int64 $at = $wall - 108000;
+        array<int32> $seen = [$this->type($at)->offset];
+
+        while (true) {
+            int64 $next = guard $this->nextSecs($at) else {
+                break;
+            };
+
+            if ($next > $limit) {
+                break;
+            }
+
+            $seen[] = $this->type($next)->offset;
+            $at = $next;
+        }
+
+        array<int32> $valid = [];
+
+        foreach ($seen as const &$o) {
+            if ($this->type($wall - ($o as int64))->offset == $o && !Zone::holds($valid, $o)) {
+                $valid[] = $o;
+            }
+        }
+
+        // a larger offset is an earlier instant for the same wall clock
+        $valid->sort(by: function(const int32& $a, const int32& $b) : ordering { return $b <=> $a; });
+        array<Offset> $out = [];
+
+        foreach ($valid as const &$o) {
+            $out[] = Offset($o);
+        }
+
+        return $out;
+    }
+
+    /**
+     * The local time type in force at Unix second `$secs`.
+     */
+    internal const function type(int64 $secs) : ZoneType
+    {
+        usize $n = $this->times->count();
+
+        if ($n == 0 || $secs >= $this->times[$n - 1]) {
+            if ($this->rule != null) {
+                PosixRule $r = guard $this->rule;
+                return $r->at($secs);
+            }
+
+            if ($n == 0) {
+                return $this->types[0];
+            }
+
+            return $this->types[$this->kinds[$n - 1] as usize];
+        }
+
+        if ($secs < $this->times[0]) {
+            return $this->types[0];
+        }
+
+        // the last transition at or before $secs
+        usize $lo = 0;
+        usize $hi = $n - 1;
+
+        while ($lo < $hi) {
+            usize $mid = $lo + ($hi - $lo + 1) / 2;
+
+            if ($this->times[$mid] <= $secs) {
+                $lo = $mid;
+            } else {
+                $hi = $mid - 1;
+            }
+        }
+
+        return $this->types[$this->kinds[$lo] as usize];
+    }
+
+    internal const function nextSecs(int64 $after) : int64?
+    {
+        usize $n = $this->times->count();
+
+        if ($n > 0 && $after < $this->times[$n - 1]) {
+            usize $lo = 0;
+            usize $hi = $n - 1;
+
+            // the first transition strictly after $after
+            while ($lo < $hi) {
+                usize $mid = $lo + ($hi - $lo) / 2;
+
+                if ($this->times[$mid] > $after) {
+                    $hi = $mid;
+                } else {
+                    $lo = $mid + 1;
+                }
+            }
+
+            return $this->times[$lo];
+        }
+
+        if ($this->rule == null) {
+            return null;
+        }
+
+        PosixRule $r = guard $this->rule;
+        return $r->next($after);
+    }
+
+    internal const function previousSecs(int64 $before) : int64?
+    {
+        usize $n = $this->times->count();
+
+        if ($this->rule != null && ($n == 0 || $before > $this->times[$n - 1])) {
+            PosixRule $r = guard $this->rule;
+            int64? $ruled = $r->previous($before);
+
+            if ($ruled != null) {
+                int64 $found = guard $ruled;
+
+                if ($n == 0 || $found > $this->times[$n - 1]) {
+                    return $found;
+                }
+            }
+        }
+
+        if ($n == 0 || $before <= $this->times[0]) {
+            return null;
+        }
+
+        // the last transition strictly before $before
+        usize $lo = 0;
+        usize $hi = $n - 1;
+
+        while ($lo < $hi) {
+            usize $mid = $lo + ($hi - $lo + 1) / 2;
+
+            if ($this->times[$mid] < $before) {
+                $lo = $mid;
+            } else {
+                $hi = $mid - 1;
+            }
+        }
+
+        return $this->times[$lo];
+    }
+
+    private static function holds(const array<int32>& $list, int32 $value) : bool
+    {
+        foreach ($list as const &$v) {
+            if ($v == $value) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}

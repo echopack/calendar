@@ -1,0 +1,52 @@
+namespace calendar;
+
+/**
+ * The cursor `foreach` uses over a `DateRange` or `DateSteps`. Each date is computed from the
+ * start, so clamped month steps never drift.
+ */
+public struct DateCursor : contract::iterator<Date>, contract::keyed<usize>
+{
+    private Date $start;
+    private Date $end;
+    private Period $step;
+    private Date $value;
+    private int64 $produced;
+
+    constructor(Date $start, Date $end, Period $step)
+    {
+        $this->start = $start;
+        $this->end = $end;
+        $this->step = $step;
+        $this->value = $start;
+        $this->produced = 0;
+    }
+
+    public function advance() : bool
+    {
+        Period $by = $this->step * $this->produced;
+        Date $next = guard $this->start->shift($by->totalMonths(), $by->totalDays(), .clamp) else {
+            return false;
+        };
+
+        if ($next >= $this->end) {
+            return false;
+        }
+
+        $this->value = $next;
+        $this->produced = $this->produced + 1;
+        return true;
+    }
+
+    public function current() : Date&
+    {
+        return &$this->value;
+    }
+
+    /**
+     * The position, starting at 0.
+     */
+    public function key() : usize
+    {
+        return ($this->produced - 1) as usize;
+    }
+}

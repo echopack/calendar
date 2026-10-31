@@ -1,0 +1,19 @@
+namespace calendar;
+
+/**
+ * Where zone rules come from. `SystemZones` reads the operating system's zone files; a
+ * package that ships its own copy implements this too, and a `Calendar` takes whichever you
+ * give it.
+ */
+public interface ZoneSource
+{
+    /**
+     * The zone named `$id`, an IANA name such as `Europe/Zurich`.
+     */
+    function load(const string& $id) : result<Zone, ZoneError>;
+
+    /**
+     * Every zone name this source knows, in no particular order.
+     */
+    function ids() : array<string>;
+}

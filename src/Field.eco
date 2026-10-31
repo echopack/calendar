@@ -1,0 +1,50 @@
+namespace calendar;
+
+/**
+ * One component of a date or time. Errors name the field that went wrong, and a pattern token
+ * names the field it reads or writes.
+ */
+public enum Field
+{
+    case era;
+    case year;
+    case weekYear;
+    case quarter;
+    case month;
+    case week;
+    case day;
+    case dayOfYear;
+    case weekday;
+    case dayPeriod;
+    case hour;
+    case minute;
+    case second;
+    case nanosecond;
+    case offset;
+    case zone;
+
+    /**
+     * The field as a word for messages: `day of year`, `week year`.
+     */
+    public const function label() : string
+    {
+        return match ($this) {
+            .era => 'era',
+            .year => 'year',
+            .weekYear => 'week year',
+            .quarter => 'quarter',
+            .month => 'month',
+            .week => 'week',
+            .day => 'day',
+            .dayOfYear => 'day of year',
+            .weekday => 'weekday',
+            .dayPeriod => 'day period',
+            .hour => 'hour',
+            .minute => 'minute',
+            .second => 'second',
+            .nanosecond => 'nanosecond',
+            .offset => 'offset',
+            .zone => 'zone',
+        };
+    }
+}

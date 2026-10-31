@@ -1,0 +1,12 @@
+namespace calendar;
+
+/**
+ * One local time type of a zone: the offset, whether it is daylight saving time, and the
+ * abbreviation in use (`CET`, `CEST`).
+ */
+internal struct ZoneType
+{
+    internal const int32 $offset;
+    internal const bool $dst;
+    internal const string $abbr;
+}

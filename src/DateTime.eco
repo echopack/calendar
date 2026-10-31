@@ -1,0 +1,387 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * A date and a time of day on a wall clock, with no zone.
+ *
+ * "The meeting is at 09:30 on Friday" before anyone says where. It is not a moment: the same
+ * wall clock happens at a different instant in every zone. Put it in a zone with `at()` to
+ * get a `Zoned`. Arithmetic here is plain wall-clock arithmetic; every day is 24 hours long.
+ */
+public struct DateTime : contract::comparable<DateTime>
+{
+    public const Date $date;
+    public const Time $time;
+
+    constructor(Date $date, Time $time)
+    {
+        $this->date = $date;
+        $this->time = $time;
+    }
+
+    constructor(int32 $year, Month $month, int32 $day, int32 $hour = 0, int32 $minute = 0, int32 $second = 0, int32 $nanosecond = 0)
+    {
+        $this->date = Date($year, $month, $day);
+        $this->time = Time($hour, $minute, $second, $nanosecond);
+    }
+
+    /**
+     * A date and time from runtime numbers, checked.
+     */
+    public static function of(int64 $year, int64 $month, int64 $day, int64 $hour = 0, int64 $minute = 0, int64 $second = 0, int64 $nanosecond = 0) : result<DateTime, DateError>
+    {
+        Date $date = guard Date::of($year, $month, $day) else ($e) {
+            return .error($e);
+        };
+
+        Time $time = guard Time::of($hour, $minute, $second, $nanosecond) else ($e) {
+            return .error($e);
+        };
+
+        return .ok(DateTime($date, $time));
+    }
+
+    /**
+     * Parse ISO 8601 `2026-10-28T14:05`, with optional seconds and fraction. A space may
+     * stand in for the `T`. No offset or zone is accepted; that text is a `Zoned`.
+     */
+    public static function parse(const string& $text) : result<DateTime, ParseError>
+    {
+        Scanner $s = Scanner($text);
+        DateTime $dt = guard DateTime::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        return .ok($dt);
+    }
+
+    /**
+     * Parse with a pattern, `dd.MM.yyyy HH:mm`. Date fields as for `Date::parse`, time fields
+     * as for `Time::parse`.
+     */
+    public static function parse(const string& $text, const Format& $format) : result<DateTime, ParseError>
+    {
+        Fields $f = guard Fields::read($format, $text, Zone::system()) else ($e) {
+            return .error($e);
+        };
+
+        Date $date = guard $f->date($format->rule) else ($e) {
+            return .error($e);
+        };
+
+        Time $time = guard $f->time() else ($e) {
+            return .error($e);
+        };
+
+        return .ok(DateTime($date, $time));
+    }
+
+    /**
+     * Add a period. Years and months move the date with the day clamped, weeks and days move
+     * it by whole days, and the clock fields move the time, carrying into the date.
+     */
+    public const function add(const Period& $p) : DateTime
+    {
+        DateTime $dt = guard $this->add($p, .clamp);
+        return $dt;
+    }
+
+    public const function add(const Period& $p, Overflow $mode) : result<DateTime, DateError>
+    {
+        Date $date = guard $this->date->shift($p->totalMonths(), $p->totalDays(), $mode) else ($e) {
+            return .error($e);
+        };
+
+        return DateTime($date, $this->time)->moved($p->exact());
+    }
+
+    public const function add(const time::duration& $d) : DateTime
+    {
+        DateTime $dt = guard $this->moved($d);
+        return $dt;
+    }
+
+    public const function sub(const Period& $p) : DateTime
+    {
+        return $this->add(-$p);
+    }
+
+    public const function sub(const Period& $p, Overflow $mode) : result<DateTime, DateError>
+    {
+        return $this->add(-$p, $mode);
+    }
+
+    public const function sub(const time::duration& $d) : DateTime
+    {
+        return $this->add(-$d);
+    }
+
+    /**
+     * The calendar distance to `$other`: years, months and days as `Date::until` counts them,
+     * then hours, minutes, seconds and nanoseconds. `$a + $a->until($b)` lands on `$b`.
+     */
+    public const function until(const DateTime& $other) : Period
+    {
+        int64 $clock = $other->time->nanos() - $this->time->nanos();
+        Date $end = $other->date;
+
+        if ($other >= $this) {
+            if ($clock < 0) {
+                $end = Date(epochDay: $end->epochDay() - 1);
+                $clock = $clock + NANOS_PER_DAY;
+            }
+        } else if ($clock > 0) {
+            $end = Date(epochDay: $end->epochDay() + 1);
+            $clock = $clock - NANOS_PER_DAY;
+        }
+
+        Period $p = $this->date->until($end);
+        return Period::split($p->totalMonths(), $p->days, $clock);
+    }
+
+    /**
+     * How many whole `$unit`s from here to `$other`, positive when `$other` is later.
+     */
+    public const function until(const DateTime& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        if (!$unit->calendar()) {
+            return $unit->count($this->span($other), $mode);
+        }
+
+        int64 $step = $unit->months();
+        int64 $whole = $this->until($other)->totalMonths() / $step;
+        DateTime $base = $this->months($whole * $step);
+        time::duration $rest = $base->span($other);
+
+        if ($rest->is_zero()) {
+            return $whole;
+        }
+
+        int64 $toward = 1;
+
+        if ($rest->is_negative()) {
+            $toward = -1;
+        }
+
+        DateTime $next = $this->months(($whole + $toward) * $step);
+        return $mode->apply($whole, $rest->as_nanos(), $base->span($next)->abs()->as_nanos());
+    }
+
+    public const function since(const DateTime& $other) : Period
+    {
+        return $other->until($this);
+    }
+
+    public const function since(const DateTime& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        return $other->until($this, $unit, $mode);
+    }
+
+    /**
+     * The start of the year, quarter, month, week, day, hour, minute or second this is in.
+     */
+    public const function start(Unit $unit, WeekRule $rule = WeekRule::iso()) : DateTime
+    {
+        if (!$unit->clock()) {
+            return DateTime($this->date->start($unit, $rule), Time::midnight());
+        }
+
+        return DateTime($this->date, $this->time->start($unit));
+    }
+
+    /**
+     * Round to a multiple of `$unit`, a day or smaller. Rounding up from 23:59:59.6 to the
+     * second carries into the next day.
+     */
+    public const function round(Unit $unit, Rounding $mode = .halfExpand) : DateTime
+    {
+        if ($unit->calendar() || $unit == Unit::week) {
+            die('calendar: a DateTime rounds to days or smaller units');
+        }
+
+        int64 $length = $unit->nanos();
+        int64 $n = $this->time->nanos();
+        int64 $q = $mode->apply($n / $length, $n % $length, $length) * $length;
+        int64 $days = floorDiv($q, NANOS_PER_DAY);
+        return DateTime(Date(epochDay: $this->date->epochDay() + $days), Time(nanos: floorMod($q, NANOS_PER_DAY)));
+    }
+
+    /**
+     * A copy with some fields replaced. The day clamps to the target month, as in
+     * `Date->with`.
+     */
+    public const function with(int32? $year = null, Month? $month = null, int32? $day = null, int32? $hour = null, int32? $minute = null, int32? $second = null, int32? $nanosecond = null) : DateTime
+    {
+        return DateTime($this->date->with($year, $month, $day), $this->time->with($hour, $minute, $second, $nanosecond));
+    }
+
+    /**
+     * Render with a pattern, `dd.MM.yyyy`, names in `$locale`. A bad pattern stops the
+     * program; compile runtime patterns with `Format::of` first.
+     */
+    public const function format(const string& $pattern, Locale $locale = Locale::en()) : string
+    {
+        return Format($pattern)->locale($locale)->render($this);
+    }
+
+    /**
+     * Render with a compiled format, in the format's own language.
+     */
+    public const function format(const Format& $format) : string
+    {
+        return $format->render($this);
+    }
+
+    /**
+     * This wall clock in `$zone`. A time skipped by a DST change moves forward by the gap and
+     * a repeated time takes the earlier instant; use `resolve` to choose or to fail instead.
+     */
+    public const function at(Zone $zone) : Zoned
+    {
+        Zoned $z = guard $this->resolve($zone, .compatible);
+        return $z;
+    }
+
+    /**
+     * This wall clock in `$zone`, with the DST rule spelled out.
+     */
+    public const function resolve(Zone $zone, Disambiguation $how) : result<Zoned, DateError>
+    {
+        array<Offset> $found = $zone->candidates($this);
+
+        if ($found->count() == 1) {
+            return .ok(Zoned($this->instant($found[0]->seconds as int64), $zone));
+        }
+
+        if ($found->count() > 1) {
+            if ($how == Disambiguation::reject) {
+                return .error(.overlap($zone->id));
+            }
+
+            Offset $o = $found[0];
+
+            if ($how == Disambiguation::later) {
+                $o = $found[$found->count() - 1];
+            }
+
+            return .ok(Zoned($this->instant($o->seconds as int64), $zone));
+        }
+
+        if ($how == Disambiguation::reject) {
+            return .error(.gap($zone->id));
+        }
+
+        int64 $wall = $this->wall();
+        int64 $before = $zone->type($wall - SECS_PER_DAY)->offset as int64;
+        int64 $after = $zone->type($wall + SECS_PER_DAY)->offset as int64;
+        int64 $shift = $before;
+
+        if ($how == Disambiguation::earlier) {
+            $shift = $after;
+        }
+
+        return .ok(Zoned($this->instant($shift), $zone));
+    }
+
+    // the wall clock read as Unix seconds, as if it were UTC
+    internal const function wall() : int64
+    {
+        return $this->date->epochDay() * SECS_PER_DAY + $this->time->nanos() / NANOS_PER_SEC;
+    }
+
+    // the instant this wall clock happens at, $offset seconds east of UTC
+    internal const function instant(int64 $offset) : time::timestamp
+    {
+        return time::timestamp::from_unix_secs($this->wall() - $offset) + time::duration::nanos($this->time->nanosecond as int64);
+    }
+
+    // the exact wall-clock length to $other, every day 24 hours
+    internal const function span(const DateTime& $other) : time::duration
+    {
+        int64 $days = $other->date->epochDay() - $this->date->epochDay();
+        return time::duration::secs($days * SECS_PER_DAY) + time::duration::nanos($other->time->nanos() - $this->time->nanos());
+    }
+
+    // this date-time plus $n months, day clamped, clock unchanged
+    internal const function months(int64 $n) : DateTime
+    {
+        return DateTime($this->date->months($n), $this->time);
+    }
+
+    // add an exact length on the wall clock
+    internal const function moved(const time::duration& $d) : result<DateTime, DateError>
+    {
+        int64 $secs = $d->as_secs();
+        int64 $days = floorDiv($secs, SECS_PER_DAY);
+        int64 $total = $this->time->nanos() + floorMod($secs, SECS_PER_DAY) * NANOS_PER_SEC + ($d->subsec_nanos() as int64);
+        $days = $days + floorDiv($total, NANOS_PER_DAY);
+        int64 $serial = $this->date->epochDay() + $days;
+
+        if ($serial < MIN_DAY || $serial > MAX_DAY) {
+            return .error(.overflow);
+        }
+
+        return .ok(DateTime(Date(epochDay: $serial), Time(nanos: floorMod($total, NANOS_PER_DAY))));
+    }
+
+    internal static function scan(Scanner& $s) : result<DateTime, ParseError>
+    {
+        Date $date = guard Date::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        if (!$s->eat(84) && !$s->eat(116) && !$s->eat(32)) {
+            return .error(.expected($s->at, "'T'"));
+        }
+
+        Time $time = guard Time::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        return .ok(DateTime($date, $time));
+    }
+}
+
+operator (const DateTime& $a) == (const DateTime& $b) : bool
+{
+    return $a->date == $b->date && $a->time == $b->time;
+}
+
+operator (const DateTime& $a) != (const DateTime& $b) : bool
+{
+    return !($a == $b);
+}
+
+operator (const DateTime& $a) < (const DateTime& $b) : bool
+{
+    if ($a->date != $b->date) {
+        return $a->date < $b->date;
+    }
+
+    return $a->time < $b->time;
+}
+
+operator (const DateTime& $a) + (const Period& $p) : DateTime
+{
+    return $a->add($p);
+}
+
+operator (const DateTime& $a) - (const Period& $p) : DateTime
+{
+    return $a->sub($p);
+}
+
+operator (const DateTime& $a) + (const time::duration& $d) : DateTime
+{
+    return $a->add($d);
+}
+
+operator (const DateTime& $a) - (const time::duration& $d) : DateTime
+{
+    return $a->sub($d);
+}

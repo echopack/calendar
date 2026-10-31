@@ -1,0 +1,344 @@
+namespace calendar;
+
+/**
+ * The POSIX TZ string at the end of a zone file, like `CET-1CEST,M3.5.0,M10.5.0/3`. It
+ * describes every year after the last listed transition, so the far future works without a
+ * table that runs out.
+ *
+ * POSIX writes offsets west of UTC as positive; they are stored east-positive here like
+ * everywhere else in the library.
+ */
+internal struct PosixRule
+{
+    internal const ZoneType $standard;
+    internal const ZoneType $daylight;
+    internal const bool $hasDst;
+    internal const RuleDate $start;
+    internal const int64 $startTime;
+    internal const RuleDate $end;
+    internal const int64 $endTime;
+
+    internal static function parse(const string& $text) : PosixRule?
+    {
+        Scanner $s = Scanner($text);
+        string $stdName = guard PosixRule::name($s) else {
+            return null;
+        };
+
+        int64 $stdWest = guard PosixRule::clock($s) else {
+            return null;
+        };
+
+        ZoneType $std = ZoneType((-$stdWest) as int32, false, $stdName);
+        RuleDate $none = RuleDate(1, 0, 0, 0);
+
+        if ($s->done()) {
+            return PosixRule($std, $std, false, $none, 0, $none, 0);
+        }
+
+        string $dstName = guard PosixRule::name($s) else {
+            return null;
+        };
+
+        int64 $dstEast = -$stdWest + SECS_PER_HOUR;
+
+        if (!$s->done() && $s->peek() != 44) {
+            int64 $dstWest = guard PosixRule::clock($s) else {
+                return null;
+            };
+
+            $dstEast = -$dstWest;
+        }
+
+        ZoneType $dst = ZoneType($dstEast as int32, true, $dstName);
+
+        // a daylight name with no rule means the old US default
+        if ($s->done()) {
+            return PosixRule($std, $dst, true, RuleDate(2, 3, 2, 0), 7200, RuleDate(2, 11, 1, 0), 7200);
+        }
+
+        if (!$s->eat(44)) {
+            return null;
+        }
+
+        RuleDate $start = guard PosixRule::date($s) else {
+            return null;
+        };
+
+        int64 $startTime = 7200;
+
+        if ($s->eat(47)) {
+            int64 $readStart = guard PosixRule::clock($s) else {
+                return null;
+            };
+            $startTime = $readStart;
+        }
+
+        if (!$s->eat(44)) {
+            return null;
+        }
+
+        RuleDate $end = guard PosixRule::date($s) else {
+            return null;
+        };
+
+        int64 $endTime = 7200;
+
+        if ($s->eat(47)) {
+            int64 $readEnd = guard PosixRule::clock($s) else {
+                return null;
+            };
+            $endTime = $readEnd;
+        }
+
+        if (!$s->done()) {
+            return null;
+        }
+
+        return PosixRule($std, $dst, true, $start, $startTime, $end, $endTime);
+    }
+
+    /**
+     * The local time type in force at Unix second `$secs`.
+     */
+    internal const function at(int64 $secs) : ZoneType
+    {
+        if (!$this->hasDst) {
+            return $this->standard;
+        }
+
+        int64 $year = $this->year($secs);
+        int64 $on = $this->begins($year);
+        int64 $off = $this->ends($year);
+
+        if ($on < $off) {
+            if ($secs >= $on && $secs < $off) {
+                return $this->daylight;
+            }
+
+            return $this->standard;
+        }
+
+        if ($secs >= $off && $secs < $on) {
+            return $this->standard;
+        }
+
+        return $this->daylight;
+    }
+
+    /**
+     * The first transition strictly after `$secs`, or null for a rule without DST.
+     */
+    internal const function next(int64 $secs) : int64?
+    {
+        if (!$this->hasDst) {
+            return null;
+        }
+
+        int64 $year = $this->year($secs);
+        int64? $best = null;
+        int64 $y = $year - 1;
+
+        while ($y <= $year + 1) {
+            $best = PosixRule::earliest($best, $this->begins($y), $secs);
+            $best = PosixRule::earliest($best, $this->ends($y), $secs);
+            $y = $y + 1;
+        }
+
+        return $best;
+    }
+
+    /**
+     * The last transition strictly before `$secs`, or null for a rule without DST.
+     */
+    internal const function previous(int64 $secs) : int64?
+    {
+        if (!$this->hasDst) {
+            return null;
+        }
+
+        int64 $year = $this->year($secs);
+        int64? $best = null;
+        int64 $y = $year - 1;
+
+        while ($y <= $year + 1) {
+            $best = PosixRule::latest($best, $this->begins($y), $secs);
+            $best = PosixRule::latest($best, $this->ends($y), $secs);
+            $y = $y + 1;
+        }
+
+        return $best;
+    }
+
+    // the instant daylight time starts in $year; the rule's clock reads standard time
+    private const function begins(int64 $year) : int64
+    {
+        return $this->start->serial($year) * SECS_PER_DAY + $this->startTime - ($this->standard->offset as int64);
+    }
+
+    // the instant daylight time ends in $year; the rule's clock reads daylight time
+    private const function ends(int64 $year) : int64
+    {
+        return $this->end->serial($year) * SECS_PER_DAY + $this->endTime - ($this->daylight->offset as int64);
+    }
+
+    private const function year(int64 $secs) : int64
+    {
+        int64 $day = floorDiv($secs + ($this->standard->offset as int64), SECS_PER_DAY);
+
+        if ($day < MIN_DAY) {
+            return MIN_YEAR;
+        }
+
+        if ($day > MAX_DAY) {
+            return MAX_YEAR;
+        }
+
+        return Date(epochDay: $day)->year as int64;
+    }
+
+    private static function earliest(int64? $best, int64 $candidate, int64 $after) : int64?
+    {
+        if ($candidate <= $after) {
+            return $best;
+        }
+
+        int64 $current = $best ?? $candidate;
+
+        if ($candidate < $current) {
+            return $candidate;
+        }
+
+        return $current;
+    }
+
+    private static function latest(int64? $best, int64 $candidate, int64 $before) : int64?
+    {
+        if ($candidate >= $before) {
+            return $best;
+        }
+
+        int64 $current = $best ?? $candidate;
+
+        if ($candidate > $current) {
+            return $candidate;
+        }
+
+        return $current;
+    }
+
+    // `CET` or `<+0330>`
+    private static function name(Scanner& $s) : string?
+    {
+        usize $start = $s->at;
+
+        if ($s->eat(60)) {
+            while (!$s->done() && $s->peek() != 62) {
+                $s->at = $s->at + 1;
+            }
+
+            if (!$s->eat(62)) {
+                return null;
+            }
+
+            return string::from($s->text->sub($start + 1, $s->at - $start - 2));
+        }
+
+        while (!$s->done()) {
+            uint8 $c = $s->peek();
+            bool $alpha = ($c >= 65 && $c <= 90) || ($c >= 97 && $c <= 122);
+
+            if (!$alpha) {
+                break;
+            }
+
+            $s->at = $s->at + 1;
+        }
+
+        if ($s->at - $start < 3) {
+            return null;
+        }
+
+        return string::from($s->text->sub($start, $s->at - $start));
+    }
+
+    // [+-]h[h][:mm[:ss]] in seconds, hours up to 167 as POSIX extended allows
+    private static function clock(Scanner& $s) : int64?
+    {
+        int64 $sign = 1;
+
+        if ($s->eat(45)) {
+            $sign = -1;
+        } else {
+            $s->eat(43);
+        }
+
+        int64 $hours = guard $s->digits(1, 3) else {
+            return null;
+        };
+
+        int64 $minutes = 0;
+        int64 $seconds = 0;
+
+        if ($s->eat(58)) {
+            int64 $readMinutes = guard $s->digits(2, 2) else {
+                return null;
+            };
+            $minutes = $readMinutes;
+
+            if ($s->eat(58)) {
+                int64 $readSeconds = guard $s->digits(2, 2) else {
+                    return null;
+                };
+                $seconds = $readSeconds;
+            }
+        }
+
+        return $sign * ($hours * SECS_PER_HOUR + $minutes * SECS_PER_MINUTE + $seconds);
+    }
+
+    private static function date(Scanner& $s) : RuleDate?
+    {
+        if ($s->eat(74)) {
+            int64 $n = guard $s->digits(1, 3) else {
+                return null;
+            };
+
+            return RuleDate(0, 0, 0, $n as int32);
+        }
+
+        if ($s->eat(77)) {
+            int64 $m = guard $s->digits(1, 2) else {
+                return null;
+            };
+
+            if (!$s->eat(46)) {
+                return null;
+            }
+
+            int64 $w = guard $s->digits(1, 1) else {
+                return null;
+            };
+
+            if (!$s->eat(46)) {
+                return null;
+            }
+
+            int64 $d = guard $s->digits(1, 1) else {
+                return null;
+            };
+
+            if ($m < 1 || $m > 12 || $w < 1 || $w > 5 || $d > 6) {
+                return null;
+            }
+
+            return RuleDate(2, $m as int32, $w as int32, $d as int32);
+        }
+
+        int64 $n = guard $s->digits(1, 3) else {
+            return null;
+        };
+
+        return RuleDate(1, 0, 0, $n as int32);
+    }
+}

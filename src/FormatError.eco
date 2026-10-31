@@ -1,0 +1,21 @@
+namespace calendar;
+
+/**
+ * Why a pattern was refused. Positions are byte offsets into the pattern.
+ *
+ * Several of these are not syntax errors but the classic mix-ups: `YYYY` (the week-based
+ * year) where `yyyy` was meant, `DD` (day of the year) next to a month, `mm` (minutes) in a
+ * date. They print with the likely fix.
+ */
+public enum FormatError
+{
+    case empty;
+    case unknownLetter(string $letter, usize $at);
+    case tooLong(string $letter, usize $at);
+    case unclosedQuote(usize $at);
+    case weekYearWithoutWeek(usize $at);
+    case weekWithoutWeekYear(usize $at);
+    case dayOfYearWithMonth(usize $at);
+    case minuteWithoutHour(usize $at);
+    case hourWithoutPeriod(usize $at);
+}

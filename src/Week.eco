@@ -1,0 +1,21 @@
+namespace calendar;
+
+/**
+ * A numbered week of a week-based year. Near New Year the week year differs from the
+ * calendar year: 2021-01-03 is in week 53 of 2020 under the ISO rule.
+ */
+public struct Week
+{
+    public const int32 $year;
+    public const int32 $number;
+}
+
+operator (const Week& $a) == (const Week& $b) : bool
+{
+    return $a->year == $b->year && $a->number == $b->number;
+}
+
+operator (const Week& $a) != (const Week& $b) : bool
+{
+    return !($a == $b);
+}

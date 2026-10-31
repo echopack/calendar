@@ -1,0 +1,33 @@
+namespace calendar;
+
+/**
+ * Why a date or time could not be built or moved.
+ */
+public enum DateError
+{
+    /**
+     * A component is outside its fixed range: month 13, hour 24, year 12000.
+     */
+    case outOfRange(Field $field, int64 $value);
+
+    /**
+     * The month exists but has no such day: February 30, or January 31 plus one month under
+     * `Overflow::reject`.
+     */
+    case noDay(int64 $year, int64 $month, int64 $day);
+
+    /**
+     * The result would land outside the supported years -9999 to 9999.
+     */
+    case overflow;
+
+    /**
+     * The wall-clock time does not happen in the zone: clocks jumped past it.
+     */
+    case gap(string $zone);
+
+    /**
+     * The wall-clock time happens twice in the zone and the rule was `.reject`.
+     */
+    case overlap(string $zone);
+}

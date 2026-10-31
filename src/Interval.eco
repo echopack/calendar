@@ -1,0 +1,78 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * The instants from `$start` up to, not including, `$end`.
+ *
+ * Half-open on purpose: a day is from its midnight to the next one, and no instant belongs to
+ * two adjacent days. There is no "end of day" at 23:59:59.999 to get wrong.
+ */
+public struct Interval
+{
+    public const time::timestamp $start;
+    public const time::timestamp $end;
+
+    constructor(from: time::timestamp $start, until: time::timestamp $end)
+    {
+        if ($end < $start) {
+            die('calendar: an interval cannot end before it starts');
+        }
+
+        $this->start = $start;
+        $this->end = $end;
+    }
+
+    public const function duration() : time::duration
+    {
+        return $this->end - $this->start;
+    }
+
+    public const function empty() : bool
+    {
+        return $this->start == $this->end;
+    }
+
+    public const function has(const time::timestamp& $at) : bool
+    {
+        return $at >= $this->start && $at < $this->end;
+    }
+
+    public const function overlaps(const Interval& $other) : bool
+    {
+        return $this->start < $other->end && $other->start < $this->end;
+    }
+
+    /**
+     * The instants both intervals hold, or null when they share none.
+     */
+    public const function intersect(const Interval& $other) : Interval?
+    {
+        if (!$this->overlaps($other)) {
+            return null;
+        }
+
+        time::timestamp $start = $this->start;
+        time::timestamp $end = $this->end;
+
+        if ($other->start > $start) {
+            $start = $other->start;
+        }
+
+        if ($other->end < $end) {
+            $end = $other->end;
+        }
+
+        return Interval(from: $start, until: $end);
+    }
+}
+
+operator (const Interval& $a) == (const Interval& $b) : bool
+{
+    return $a->start == $b->start && $a->end == $b->end;
+}
+
+operator (const Interval& $a) != (const Interval& $b) : bool
+{
+    return !($a == $b);
+}

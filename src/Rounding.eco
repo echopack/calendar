@@ -1,0 +1,96 @@
+namespace calendar;
+
+use std::math;
+
+/**
+ * How a count with a remainder becomes a whole number.
+ */
+public enum Rounding
+{
+    /**
+     * Toward zero. 2.7 is 2 and -2.7 is -2. The default for differences.
+     */
+    case trunc;
+
+    /**
+     * Toward negative infinity. -2.3 is -3.
+     */
+    case floor;
+
+    /**
+     * Toward positive infinity. 2.3 is 3.
+     */
+    case ceil;
+
+    /**
+     * To the nearest; a tie goes away from zero. 2.5 is 3 and -2.5 is -3.
+     */
+    case halfExpand;
+
+    /**
+     * To the nearest; a tie goes to the even neighbour. 2.5 is 2 and 3.5 is 4.
+     */
+    case halfEven;
+
+    /**
+     * Round `$whole + $num / $den`. `$whole` is already truncated toward zero, `$num` carries
+     * the remainder's sign and `|$num| < $den`.
+     */
+    internal const function apply(int64 $whole, int64 $num, int64 $den) : int64
+    {
+        if ($num == 0) {
+            return $whole;
+        }
+
+        int64 $step = sign64($num);
+        int64 $twice = math::abs($num) * 2;
+
+        return match ($this) {
+            .trunc => $whole,
+            .floor => Rounding::down($whole, $num),
+            .ceil => Rounding::up($whole, $num),
+            .halfExpand => Rounding::half($whole, $step, $twice >= $den),
+            .halfEven => Rounding::even($whole, $step, $twice, $den),
+        };
+    }
+
+    private static function down(int64 $whole, int64 $num) : int64
+    {
+        if ($num < 0) {
+            return $whole - 1;
+        }
+
+        return $whole;
+    }
+
+    private static function up(int64 $whole, int64 $num) : int64
+    {
+        if ($num > 0) {
+            return $whole + 1;
+        }
+
+        return $whole;
+    }
+
+    private static function half(int64 $whole, int64 $step, bool $away) : int64
+    {
+        if ($away) {
+            return $whole + $step;
+        }
+
+        return $whole;
+    }
+
+    private static function even(int64 $whole, int64 $step, int64 $twice, int64 $den) : int64
+    {
+        if ($twice > $den) {
+            return $whole + $step;
+        }
+
+        if ($twice == $den && $whole % 2 != 0) {
+            return $whole + $step;
+        }
+
+        return $whole;
+    }
+}

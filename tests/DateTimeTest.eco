@@ -1,0 +1,65 @@
+use calendar::{Date, Time, DateTime, Month, Period, Unit, Rounding};
+use std::time;
+
+test datetime_basics
+{
+    $dt = DateTime(2026, .october, 28, 14, 5);
+    assert(str::from($dt) == '2026-10-28T14:05:00');
+    assert($dt == Date(2026, .october, 28)->at(Time(14, 5)));
+    assert(DateTime::of(2026, 2, 29)->failed());
+}
+
+test datetime_arithmetic
+{
+    $dt = DateTime(2026, .january, 31, 23, 30);
+    assert(str::from($dt + Period::months(1)) == '2026-02-28T23:30:00');
+    assert(str::from($dt + Period::hours(1)) == '2026-02-01T00:30:00');
+    assert(str::from($dt + time::duration::mins(-90)) == '2026-01-31T22:00:00');
+    assert(str::from($dt + Period($days: 1, $minutes: 45)) == '2026-02-02T00:15:00');
+    assert(str::from($dt - Period::days(31)) == '2025-12-31T23:30:00');
+}
+
+test datetime_until
+{
+    $a = DateTime(2026, .january, 31, 22);
+    $b = DateTime(2026, .march, 1, 6);
+    $p = $a->until($b);
+    assert($p == Period($months: 1, $hours: 8));
+    assert($a + $p == $b);
+    assert($b + $b->until($a) == $a);
+    assert($a->until($b, .hour) == 680);
+    assert($a->until($b, .day) == 28);
+    assert($a->until($b, .day, .halfExpand) == 28);
+    assert($a->until($b, .month) == 1);
+    assert($b->until($a, .minute) == -680 * 60);
+    assert($a->until(DateTime(2026, .january, 31, 22, 0, 0, 1), .nanosecond) == 1);
+}
+
+test datetime_start_and_round
+{
+    $dt = DateTime(2026, .october, 28, 14, 35, 12);
+    assert(str::from($dt->start(.day)) == '2026-10-28T00:00:00');
+    assert(str::from($dt->start(.month)) == '2026-10-01T00:00:00');
+    assert(str::from($dt->start(.hour)) == '2026-10-28T14:00:00');
+    assert(str::from($dt->round(.hour)) == '2026-10-28T15:00:00');
+    assert(str::from(DateTime(2026, .december, 31, 23, 59, 59, 600000000)->round(.second)) == '2027-01-01T00:00:00');
+    assert(str::from(DateTime(2026, .october, 28, 12)->round(.day)) == '2026-10-29T00:00:00');
+}
+
+test datetime_parse
+{
+    DateTime $a = guard DateTime::parse('2026-10-28T14:05:30.5');
+    assert($a == DateTime(2026, .october, 28, 14, 5, 30, 500000000));
+    DateTime $b = guard DateTime::parse('2026-10-28 14:05');
+    assert($b == DateTime(2026, .october, 28, 14, 5));
+    assert(str::from(DateTime::parse('2026-10-28')->failure()) == "expected 'T' at byte 10");
+    assert(DateTime::parse('2026-10-28T14:05Z')->failed());
+}
+
+test datetime_with
+{
+    $dt = DateTime(2026, .january, 31, 9, 30);
+    assert($dt->with($month: .february) == DateTime(2026, .february, 28, 9, 30));
+    assert($dt->with($hour: 17) == DateTime(2026, .january, 31, 17, 30));
+    assert($dt->with($day: 1, $minute: 0) == DateTime(2026, .january, 1, 9, 0));
+}

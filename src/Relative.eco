@@ -1,0 +1,113 @@
+namespace calendar;
+
+use std::math;
+use std::time;
+
+/**
+ * How to say how far away a moment is: "3 days ago", "in 2 hours", "yesterday".
+ *
+ * The distance is a calendar distance, not seconds divided by a guessed month length: from
+ * January 31 to March 1 is "1 month", from 09:00 to 09:00 three days later across a DST
+ * change is "3 days". The largest unit with a count of at least one wins and the rest is
+ * cut off, unless `$unit` fixes the unit or `$rounding` rounds instead.
+ */
+public struct Relative
+{
+    /**
+     * Always use this unit instead of picking the largest. Quarters count as months.
+     */
+    public const Unit? $unit = null;
+
+    /**
+     * True for "in 1 day" and "0 seconds ago" instead of "tomorrow" and "now".
+     */
+    public const bool $numeric = false;
+
+    /**
+     * Below this many seconds the answer is the locale's word for now, unless `$numeric`.
+     */
+    public const int64 $nowWithin = 45;
+
+    /**
+     * How the count of the chosen unit is rounded.
+     */
+    public const Rounding $rounding = .trunc;
+
+    /**
+     * `$then` described from `$now`, read in `$now`'s zone.
+     */
+    public const function render(const Zoned& $then, const Zoned& $now, Locale $locale = Locale::en()) : string
+    {
+        Zoned $target = $then->to($now->zone);
+
+        if (!$this->numeric && $this->unit == null && ($target->instant - $now->instant)->abs() < time::duration::secs($this->nowWithin)) {
+            return $locale->now;
+        }
+
+        Unit $picked = $this->unit ?? Relative::largest($now->until($target));
+        Unit $unit = $picked->spoken();
+        int64 $count = $now->until($target, $unit, $this->rounding);
+
+        if (!$this->numeric && $unit == Unit::day) {
+            int64 $days = $now->date->until($target->date, .day);
+
+            if ($days >= -1 && $days <= 1 && $count == $days) {
+                return $locale->nearDays[($days + 1) as usize];
+            }
+        }
+
+        return $locale->relative($count, $unit);
+    }
+
+    /**
+     * `$then` described from `$today` in whole days, weeks, months or years: "tomorrow",
+     * "in 3 weeks", "2 years ago".
+     */
+    public const function render(const Date& $then, const Date& $today, Locale $locale = Locale::en()) : string
+    {
+        Unit $picked = $this->unit ?? Relative::largest($today->until($then));
+        Unit $unit = $picked->spoken();
+
+        if ($unit->clock()) {
+            $unit = .day;
+        }
+
+        int64 $count = $today->until($then, $unit, $this->rounding);
+
+        if (!$this->numeric && $unit == Unit::day && $count >= -1 && $count <= 1) {
+            return $locale->nearDays[($count + 1) as usize];
+        }
+
+        return $locale->relative($count, $unit);
+    }
+
+    // the largest unit the period reaches
+    internal static function largest(const Period& $p) : Unit
+    {
+        if ($p->years != 0) {
+            return .year;
+        }
+
+        if ($p->months != 0) {
+            return .month;
+        }
+
+        if (math::abs($p->totalDays()) >= 7) {
+            return .week;
+        }
+
+        if ($p->totalDays() != 0) {
+            return .day;
+        }
+
+        if ($p->hours != 0) {
+            return .hour;
+        }
+
+        if ($p->minutes != 0) {
+            return .minute;
+        }
+
+        return .second;
+    }
+}

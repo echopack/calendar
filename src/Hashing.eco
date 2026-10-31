@@ -1,0 +1,25 @@
+/**
+ * `hash::of` for the value types, so they can key a map.
+ */
+
+namespace hash;
+
+public function of(const calendar::Date& $d) : uint64
+{
+    return of($d->epochDay());
+}
+
+public function of(const calendar::Time& $t) : uint64
+{
+    return of($t->nanos());
+}
+
+public function of(const calendar::DateTime& $dt) : uint64
+{
+    return combine(of($dt->date), of($dt->time));
+}
+
+public function of(const calendar::Zoned& $z) : uint64
+{
+    return combine(of($z->instant->unix_secs()), combine(of($z->instant->since_epoch()->subsec_nanos()), of($z->zone->id)));
+}

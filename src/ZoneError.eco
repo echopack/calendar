@@ -1,0 +1,27 @@
+namespace calendar;
+
+/**
+ * Why a time zone could not be loaded.
+ */
+public enum ZoneError
+{
+    /**
+     * No zone of that name in the source.
+     */
+    case unknown(string $id);
+
+    /**
+     * The name is not a zone name: empty, absolute, or walking out with `..`.
+     */
+    case invalid(string $id);
+
+    /**
+     * The zone file exists but is not valid zone data.
+     */
+    case corrupt(string $id);
+
+    /**
+     * The zone file could not be read.
+     */
+    case unreadable(string $id, string $reason);
+}

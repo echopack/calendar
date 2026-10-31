@@ -1,0 +1,17 @@
+namespace calendar;
+
+/**
+ * What adding months or years does when the day does not exist in the target month.
+ */
+public enum Overflow
+{
+    /**
+     * Use the last day of the target month: January 31 plus one month is February 28.
+     */
+    case clamp;
+
+    /**
+     * Fail with `DateError::noDay` instead.
+     */
+    case reject;
+}

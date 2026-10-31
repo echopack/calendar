@@ -1,0 +1,35 @@
+namespace calendar;
+
+/**
+ * Dates from a start, a step apart, before an end. What `DateRange::every()` hands to
+ * `foreach`.
+ */
+public struct DateSteps : contract::iterable<Date>, contract::const_iterable<Date>
+{
+    public const Date $start;
+    public const Date $end;
+    public const Period $step;
+
+    constructor(Date $start, Date $end, Period $step)
+    {
+        Date::dated($step);
+
+        if ($step->totalMonths() < 0 || $step->totalDays() < 0 || ($step->totalMonths() == 0 && $step->totalDays() == 0)) {
+            die('calendar: a date step has to move forward');
+        }
+
+        $this->start = $start;
+        $this->end = $end;
+        $this->step = $step;
+    }
+
+    public function iterate() : DateCursor
+    {
+        return DateCursor($this->start, $this->end, $this->step);
+    }
+
+    public const function iterate() : DateCursor
+    {
+        return DateCursor($this->start, $this->end, $this->step);
+    }
+}

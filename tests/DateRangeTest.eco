@@ -1,0 +1,59 @@
+use calendar::{Date, DateRange, Period, Unit};
+
+test range_bounds
+{
+    $oct = DateRange(from: Date(2026, .october, 1), until: Date(2026, .november, 1));
+    assert($oct->count() == 31);
+    assert($oct->has(Date(2026, .october, 31)));
+    assert(!$oct->has(Date(2026, .november, 1)));
+    $week = DateRange(from: Date(2026, .october, 26), through: Date(2026, .november, 1));
+    assert($week->count() == 7);
+    Date $last = guard $week->last();
+    assert($last == Date(2026, .november, 1));
+    assert($oct->overlaps($week));
+    DateRange $both = guard $oct->intersect($week);
+    assert(str::from($both) == '[2026-10-26, 2026-11-01)');
+    assert(DateRange(from: Date(2026, .october, 1), until: Date(2026, .october, 1))->empty());
+}
+
+test range_iterates_days
+{
+    $r = DateRange(from: Date(2026, .december, 30), through: Date(2027, .january, 2));
+    array<string> $seen = [];
+
+    foreach ($r as const &$d) {
+        $seen[] = str::from($d);
+    }
+
+    assert($seen->count() == 4);
+    assert($seen[0] == '2026-12-30');
+    assert($seen[3] == '2027-01-02');
+}
+
+test range_monthly_steps_never_drift
+{
+    $r = DateRange(from: Date(2026, .january, 31), until: Date(2026, .june, 1));
+    array<string> $seen = [];
+
+    foreach ($r->every(Period::months(1)) as $i => const &$d) {
+        $seen[] = str::from($d);
+    }
+
+    assert($seen->count() == 5);
+    assert($seen[1] == '2026-02-28');
+    assert($seen[2] == '2026-03-31');
+    assert($seen[3] == '2026-04-30');
+    assert($seen[4] == '2026-05-31');
+}
+
+test range_of_a_unit
+{
+    $october = Date(2026, .october, 15)->span(.month);
+    assert($october == DateRange(from: Date(2026, .october, 1), until: Date(2026, .november, 1)));
+    assert($october->count() == 31);
+    $week = Date(2026, .october, 28)->span(.week);
+    assert($week->start == Date(2026, .october, 26));
+    assert($week->count() == 7);
+    assert(Date(2024, .june, 1)->span(.year)->count() == 366);
+    assert(Date(2026, .june, 1)->span(.day)->count() == 1);
+}

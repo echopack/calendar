@@ -1,0 +1,65 @@
+namespace calendar;
+
+/**
+ * A day of the week. Numbered Monday 1 to Sunday 7, the ISO order; where a week starts is a
+ * `WeekRule`, not this enum.
+ */
+public enum Weekday : uint8
+{
+    case monday = 1;
+    case tuesday = 2;
+    case wednesday = 3;
+    case thursday = 4;
+    case friday = 5;
+    case saturday = 6;
+    case sunday = 7;
+
+    /**
+     * The weekday for a number 1 (Monday) to 7 (Sunday), or null.
+     */
+    public static function of(int64 $number) : Weekday?
+    {
+        if ($number < 1 || $number > 7) {
+            return null;
+        }
+
+        return Weekday::from($number as uint8);
+    }
+
+    /**
+     * The ISO number as an `int32`, Monday 1 to Sunday 7.
+     */
+    public const function number() : int32
+    {
+        return $this->value() as int32;
+    }
+
+    /**
+     * The weekday `$count` days later. Negative goes back.
+     */
+    public const function plus(int64 $count) : Weekday
+    {
+        int64 $n = floorMod(($this->number() as int64) - 1 + $count, 7) + 1;
+        Weekday $w = guard Weekday::from($n as uint8);
+        return $w;
+    }
+
+    public const function next() : Weekday
+    {
+        return $this->plus(1);
+    }
+
+    public const function previous() : Weekday
+    {
+        return $this->plus(-1);
+    }
+
+    /**
+     * Days forward from this weekday to `$other`, 0 to 6. Monday until Sunday is 6, Sunday
+     * until Monday is 1.
+     */
+    public const function until(Weekday $other) : int64
+    {
+        return floorMod(($other->number() - $this->number()) as int64, 7);
+    }
+}

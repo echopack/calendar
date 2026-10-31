@@ -1,0 +1,471 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * An instant in a time zone: what a clock on the wall there reads at that moment.
+ *
+ * This is the everyday type. `$instant` is the moment, `$zone` the rules, and `$offset`,
+ * `$date` and `$time` what those rules say at that moment; `local()` is the wall clock as a
+ * `DateTime`. Calendar arithmetic (years, months, days)
+ * moves the wall clock and keeps 09:00 at 09:00 across a DST change; exact arithmetic
+ * (hours, durations) moves the instant.
+ *
+ * `==` means the same instant in the same zone. `<` and `>` compare instants only.
+ */
+public struct Zoned : contract::comparable<Zoned>
+{
+    public const time::timestamp $instant;
+    public const Zone $zone;
+    public const Offset $offset;
+    public const Date $date;
+    public const Time $time;
+
+    constructor(time::timestamp $instant, Zone $zone)
+    {
+        Offset $offset = $zone->offset($instant);
+        int64 $secs = $instant->unix_secs() + ($offset->seconds as int64);
+        int64 $nanos = $instant->since_epoch()->subsec_nanos() as int64;
+
+        $this->instant = $instant;
+        $this->zone = $zone;
+        $this->offset = $offset;
+        $this->date = Date(epochDay: floorDiv($secs, SECS_PER_DAY));
+        $this->time = Time(nanos: floorMod($secs, SECS_PER_DAY) * NANOS_PER_SEC + $nanos);
+    }
+
+    /**
+     * The current instant in `$zone`, read from the system clock. A `Calendar` reads its own
+     * clock instead, which is what tests replace.
+     */
+    public static function now(Zone $zone) : Zoned
+    {
+        return Zoned(time::timestamp::now(), $zone);
+    }
+
+    /**
+     * Parse RFC 9557 text, `2026-10-28T09:30:00+01:00[Europe/Zurich]`, with zones from the
+     * system. An offset and a zone that disagree fail with `ParseError::conflict`. Without a
+     * zone the offset becomes a fixed zone; without an offset the wall clock resolves with
+     * `Disambiguation::compatible`.
+     */
+    public static function parse(const string& $text) : result<Zoned, ParseError>
+    {
+        return Zoned::parse($text, Zone::system());
+    }
+
+    /**
+     * Parse RFC 9557 text with zones from `$zones`.
+     */
+    public static function parse(const string& $text, ZoneSource $zones) : result<Zoned, ParseError>
+    {
+        Scanner $s = Scanner($text);
+        DateTime $local = guard DateTime::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        Offset? $offset = null;
+        usize $offsetAt = $s->at;
+
+        if (!$s->done() && $s->peek() != 91) {
+            Offset $o = guard Offset::scan($s) else ($e) {
+                return .error($e);
+            };
+
+            $offset = $o;
+        }
+
+        Zone? $zone = null;
+
+        if ($s->eat(91)) {
+            $s->eat(33);
+            usize $idAt = $s->at;
+            usize $close = $text->find(']', $idAt);
+
+            if ($close >= $text->size() || $close == $idAt) {
+                return .error(.expected($idAt, 'a zone name and \']\''));
+            }
+
+            string $id = string::from($text->sub($idAt, $close - $idAt));
+            $s->at = $close + 1;
+            uint8 $first = $id->byte(0);
+
+            if ($first == 43 || $first == 45) {
+                Offset $fixed = guard Offset::parse($id) else {
+                    return .error(.unknownZone($id, $idAt));
+                };
+
+                $zone = Zone(offset: $fixed);
+            } else {
+                Zone $named = guard $zones->load($id) else {
+                    return .error(.unknownZone($id, $idAt));
+                };
+
+                $zone = $named;
+            }
+
+            // further annotations: [key=value], ignored unless marked critical with !
+            while ($s->eat(91)) {
+                usize $at = $s->at;
+                bool $critical = $s->eat(33);
+                usize $end = $text->find(']', $s->at);
+
+                if ($end >= $text->size()) {
+                    return .error(.expected($at, '\']\''));
+                }
+
+                string $note = string::from($text->sub($s->at, $end - $s->at));
+
+                if ($critical && $note != 'u-ca=iso8601' && $note != 'u-ca=gregory') {
+                    return .error(.expected($at, 'an annotation this library understands'));
+                }
+
+                $s->at = $end + 1;
+            }
+        }
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        if ($offset == null && $zone == null) {
+            return .error(.missing(.offset));
+        }
+
+        return Zoned::assemble($local, $offset, $offsetAt, $zone);
+    }
+
+    /**
+     * Parse with a pattern that names a zone (`VV`) or an offset (`XXX`, `Z`, `O`). With
+     * both, they have to agree. Zone names come from `$zones`.
+     */
+    public static function parse(const string& $text, const Format& $format, ZoneSource $zones = Zone::system()) : result<Zoned, ParseError>
+    {
+        return Zoned::read($text, $format, $zones, null);
+    }
+
+    internal static function read(const string& $text, const Format& $format, ZoneSource $zones, Zone? $fallback) : result<Zoned, ParseError>
+    {
+        Fields $f = guard Fields::read($format, $text, $zones) else ($e) {
+            return .error($e);
+        };
+
+        Date $date = guard $f->date($format->rule) else ($e) {
+            return .error($e);
+        };
+
+        Time $time = guard $f->time() else ($e) {
+            return .error($e);
+        };
+
+        Zone? $named = $f->zone ?? $fallback;
+
+        // a format that always writes in one zone, like HTTP's literal GMT, reads in it too
+        if ($f->zone == null && $f->offset == null && $format->zone != null) {
+            $named = $format->zone;
+        }
+
+        if ($named == null && $f->offset == null) {
+            return .error(.missing(.zone));
+        }
+
+        return Zoned::assemble(DateTime($date, $time), $f->offset, $f->offsetAt, $named);
+    }
+
+    // a wall clock and what the text said about where: an offset alone is a fixed zone, a
+    // zone alone resolves compatibly, and the two together have to agree
+    private static function assemble(const DateTime& $local, Offset? $offset, usize $offsetAt, Zone? $zone) : result<Zoned, ParseError>
+    {
+        if ($offset == null) {
+            Zone $z = guard $zone;
+            Zoned $resolved = $local->at($z);
+            return .ok($resolved);
+        }
+
+        Offset $o = guard $offset;
+        Zoned $exact = Zoned($local->instant($o->seconds as int64), $zone ?? Zone(offset: $o));
+
+        if ($exact->offset != $o) {
+            return .error(.conflict($offsetAt));
+        }
+
+        return .ok($exact);
+    }
+
+    /**
+     * The wall clock here, as a `DateTime`.
+     */
+    public const function local() : DateTime
+    {
+        return DateTime($this->date, $this->time);
+    }
+
+    /**
+     * The same instant in another zone.
+     */
+    public const function to(Zone $zone) : Zoned
+    {
+        return Zoned($this->instant, $zone);
+    }
+
+    /**
+     * Add a period: years, months, weeks and days on the wall clock (day clamped, DST
+     * resolved compatibly), then hours and below as exact time.
+     */
+    public const function add(const Period& $p) : Zoned
+    {
+        Zoned $z = guard $this->add($p, .clamp, .compatible);
+        return $z;
+    }
+
+    public const function add(const Period& $p, Overflow $mode, Disambiguation $how = .compatible) : result<Zoned, DateError>
+    {
+        Zoned $base = $this;
+
+        if ($p->totalMonths() != 0 || $p->totalDays() != 0) {
+            Date $date = guard $this->date->shift($p->totalMonths(), $p->totalDays(), $mode) else ($e) {
+                return .error($e);
+            };
+
+            Zoned $moved = guard DateTime($date, $this->time)->resolve($this->zone, $how) else ($e) {
+                return .error($e);
+            };
+
+            $base = $moved;
+        }
+
+        if ($p->dated()) {
+            return .ok($base);
+        }
+
+        return .ok(Zoned($base->instant + $p->exact(), $this->zone));
+    }
+
+    /**
+     * Move the instant by an exact length. The wall clock follows whatever the zone says.
+     */
+    public const function add(const time::duration& $d) : Zoned
+    {
+        return Zoned($this->instant + $d, $this->zone);
+    }
+
+    public const function sub(const Period& $p) : Zoned
+    {
+        return $this->add(-$p);
+    }
+
+    public const function sub(const Period& $p, Overflow $mode, Disambiguation $how = .compatible) : result<Zoned, DateError>
+    {
+        return $this->add(-$p, $mode, $how);
+    }
+
+    public const function sub(const time::duration& $d) : Zoned
+    {
+        return $this->add(-$d);
+    }
+
+    /**
+     * The calendar distance to `$other`, read in this zone: years, months and days on the
+     * wall clock, then the exact time that is left. `$a + $a->until($b)` is `$b`'s instant.
+     */
+    public const function until(const Zoned& $other) : Period
+    {
+        Zoned $target = $other->to($this->zone);
+        Period $wall = $this->local()->until($target->local());
+        int64 $months = $wall->totalMonths();
+        int64 $days = $wall->days;
+        Zoned $mid = $this->add(Period($months: $months, $days: $days));
+
+        // a DST change can push the wall-clock midpoint past the target; give back a day
+        if ($target->instant >= $this->instant && $mid->instant > $target->instant) {
+            $days = $days - 1;
+            $mid = $this->add(Period($months: $months, $days: $days));
+        } else if ($target->instant < $this->instant && $mid->instant < $target->instant) {
+            $days = $days + 1;
+            $mid = $this->add(Period($months: $months, $days: $days));
+        }
+
+        return Period::split($months, $days, ($target->instant - $mid->instant)->as_nanos());
+    }
+
+    /**
+     * How many whole `$unit`s to `$other`. Days and longer are calendar days in this zone, so
+     * the day of a DST change counts as one day; hours and below are exact.
+     */
+    public const function until(const Zoned& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        if ($unit->clock()) {
+            return $unit->count($other->instant - $this->instant, $mode);
+        }
+
+        Zoned $target = $other->to($this->zone);
+        int64 $whole = $this->local()->until($target->local(), $unit, .trunc);
+        Zoned $base = $this->add($unit->times($whole));
+
+        if ($target->instant >= $this->instant && $base->instant > $target->instant) {
+            $whole = $whole - 1;
+            $base = $this->add($unit->times($whole));
+        } else if ($target->instant < $this->instant && $base->instant < $target->instant) {
+            $whole = $whole + 1;
+            $base = $this->add($unit->times($whole));
+        }
+
+        time::duration $rest = $target->instant - $base->instant;
+
+        if ($rest->is_zero()) {
+            return $whole;
+        }
+
+        int64 $toward = 1;
+
+        if ($rest->is_negative()) {
+            $toward = -1;
+        }
+
+        Zoned $next = $this->add($unit->times($whole + $toward));
+        return $mode->apply($whole, $rest->as_nanos(), ($next->instant - $base->instant)->abs()->as_nanos());
+    }
+
+    public const function since(const Zoned& $other) : Period
+    {
+        return $other->until($this);
+    }
+
+    public const function since(const Zoned& $other, Unit $unit, Rounding $mode = .trunc) : int64
+    {
+        return $other->until($this, $unit, $mode);
+    }
+
+    /**
+     * The first instant of the year, quarter, month, week, day, hour, minute or second this
+     * is in. A day that starts at 01:00 because of DST starts at 01:00.
+     */
+    public const function start(Unit $unit, WeekRule $rule = WeekRule::iso()) : Zoned
+    {
+        return $this->settle($this->local()->start($unit, $rule));
+    }
+
+    /**
+     * The whole unit this is in, as a half-open interval: from its first instant up to the
+     * first instant of the next one. A day is 23, 24 or 25 hours long here.
+     */
+    public const function span(Unit $unit, WeekRule $rule = WeekRule::iso()) : Interval
+    {
+        Zoned $start = $this->start($unit, $rule);
+
+        if ($unit->clock()) {
+            return Interval(from: $start->instant, until: $start->instant + time::duration::nanos($unit->nanos()));
+        }
+
+        Zoned $next = $start->add($unit->times(1))->start($unit, $rule);
+        return Interval(from: $start->instant, until: $next->instant);
+    }
+
+    /**
+     * Round to a multiple of `$unit`, a day or smaller. Days round against the real length
+     * of the day in this zone.
+     */
+    public const function round(Unit $unit, Rounding $mode = .halfExpand) : Zoned
+    {
+        if ($unit->calendar() || $unit == Unit::week) {
+            die('calendar: a Zoned rounds to days or smaller units');
+        }
+
+        if ($unit == Unit::day) {
+            Interval $day = $this->span(.day);
+            int64 $into = ($this->instant - $day->start)->as_nanos();
+            int64 $length = $day->duration()->as_nanos();
+
+            if ($mode->apply(0, $into, $length) == 0) {
+                return Zoned($day->start, $this->zone);
+            }
+
+            return Zoned($day->end, $this->zone);
+        }
+
+        return $this->settle($this->local()->round($unit, $mode));
+    }
+
+    /**
+     * A copy with some wall-clock fields replaced, in the same zone: `->with($hour: 17)` is
+     * 17:00 that day. The day clamps to the target month. Inside a repeated hour the current
+     * offset is kept; otherwise DST resolves compatibly. For another rule, use
+     * `local()->with(...)->resolve($zone, $how)`.
+     */
+    public const function with(int32? $year = null, Month? $month = null, int32? $day = null, int32? $hour = null, int32? $minute = null, int32? $second = null, int32? $nanosecond = null) : Zoned
+    {
+        return $this->settle($this->local()->with($year, $month, $day, $hour, $minute, $second, $nanosecond));
+    }
+
+    /**
+     * Render with a pattern, `dd.MM.yyyy`, names in `$locale`. A bad pattern stops the
+     * program; compile runtime patterns with `Format::of` first.
+     */
+    public const function format(const string& $pattern, Locale $locale = Locale::en()) : string
+    {
+        return Format($pattern)->locale($locale)->render($this);
+    }
+
+    /**
+     * Render with a compiled format, in the format's own language.
+     */
+    public const function format(const Format& $format) : string
+    {
+        return $format->render($this);
+    }
+
+    // a wall clock back into this zone, keeping the current offset when it is one of the
+    // choices so an hour inside a repeated hour stays on the same side
+    private const function settle(const DateTime& $local) : Zoned
+    {
+        array<Offset> $found = $this->zone->candidates($local);
+
+        foreach ($found as const &$o) {
+            if ($o == $this->offset) {
+                return Zoned($local->instant($o->seconds as int64), $this->zone);
+            }
+        }
+
+        return $local->at($this->zone);
+    }
+}
+
+operator (const Zoned& $a) == (const Zoned& $b) : bool
+{
+    return $a->instant == $b->instant && $a->zone->id == $b->zone->id;
+}
+
+operator (const Zoned& $a) != (const Zoned& $b) : bool
+{
+    return !($a == $b);
+}
+
+operator (const Zoned& $a) < (const Zoned& $b) : bool
+{
+    return $a->instant < $b->instant;
+}
+
+operator (const Zoned& $a) + (const Period& $p) : Zoned
+{
+    return $a->add($p);
+}
+
+operator (const Zoned& $a) - (const Period& $p) : Zoned
+{
+    return $a->sub($p);
+}
+
+operator (const Zoned& $a) + (const time::duration& $d) : Zoned
+{
+    return $a->add($d);
+}
+
+operator (const Zoned& $a) - (const time::duration& $d) : Zoned
+{
+    return $a->sub($d);
+}
+
+operator (const Zoned& $a) - (const Zoned& $b) : time::duration
+{
+    return $a->instant - $b->instant;
+}

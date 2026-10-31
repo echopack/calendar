@@ -1,0 +1,17 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * What a value hands the formatter: the parts it has, null for the parts it lacks. A `Date`
+ * has no time, a `DateTime` no zone.
+ */
+internal struct Moment
+{
+    internal Date? $date = null;
+    internal Time? $time = null;
+    internal Offset? $offset = null;
+    internal Zone? $zone = null;
+    internal time::timestamp? $instant = null;
+    internal string $kind = '';
+}

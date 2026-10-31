@@ -1,0 +1,68 @@
+use calendar::{Calendar, Relative, Locale, Zone, Zoned, Date, DateTime, Period, Unit, Rounding, ManualClock, FixedClock};
+use std::time;
+
+function zurichCalendar(Locale $locale) : Calendar
+{
+    // 2026-10-28T09:30:00+01:00
+    return Calendar($zone: Zone(named: 'Europe/Zurich'), $locale: $locale, $clock: FixedClock(time::timestamp::from_unix_secs(1793176200)));
+}
+
+test human_relative_english
+{
+    $cal = zurichCalendar(Locale::en());
+    $now = $cal->now();
+    assert($cal->human($now - time::duration::secs(10)) == 'now');
+    assert($cal->human($now - time::duration::mins(5)) == '5 minutes ago');
+    assert($cal->human($now + time::duration::hours(2)) == 'in 2 hours');
+    assert($cal->human($now - Period::days(1)) == 'yesterday');
+    assert($cal->human($now + Period::days(1)) == 'tomorrow');
+    assert($cal->human($now - Period::days(3)) == '3 days ago');
+    assert($cal->human($now - Period::days(10)) == '1 week ago');
+    assert($cal->human($now - Period::days(45)) == '1 month ago');
+    assert($cal->human($now + Period($years: 2, $months: 11)) == 'in 2 years');
+    assert($cal->human($now + Period($years: 2, $months: 11), Relative($rounding: .halfExpand)) == 'in 3 years');
+    assert($cal->human($now - Period::days(1), Relative($numeric: true)) == '1 day ago');
+    assert($cal->human($now - Period::days(3), Relative($unit: .hour)) == '72 hours ago');
+}
+
+test human_relative_dst_is_calendar_days
+{
+    $cal = zurichCalendar(Locale::en());
+    Zoned $before = DateTime(2026, .october, 22, 9, 30)->at($cal->zone);
+    // six calendar days back across the October change, 145 hours
+    assert($cal->human($before) == '6 days ago');
+}
+
+test human_relative_locales
+{
+    $de = zurichCalendar(Locale::de());
+    $now = $de->now();
+    assert($de->human($now - Period::days(3)) == 'vor 3 Tagen');
+    assert($de->human($now - Period::days(1)) == 'gestern');
+    assert($de->human($now + time::duration::hours(1)) == 'in 1 Stunde');
+    $fr = zurichCalendar(Locale::fr());
+    assert($fr->human($now - Period::months(2)) == 'il y a 2 mois');
+    assert($fr->human($now + Period::days(1)) == 'demain');
+    assert($fr->human($now - time::duration::secs(1), Relative($numeric: true)) == 'il y a 1 seconde');
+    $it = zurichCalendar(Locale::it());
+    assert($it->human($now - Period::years(1)) == '1 anno fa');
+    assert($it->human($now + Period::weeks(3)) == 'tra 3 settimane');
+}
+
+test human_dates
+{
+    $cal = zurichCalendar(Locale::en());
+    assert($cal->human(Date(2026, .october, 27)) == 'yesterday');
+    assert($cal->human(Date(2026, .october, 28)) == 'today');
+    assert($cal->human(Date(2026, .november, 18)) == 'in 3 weeks');
+    assert($cal->human(Date(2024, .october, 28)) == '2 years ago');
+}
+
+test human_periods
+{
+    assert(Period($years: 1, $months: 2, $days: 3)->human() == '1 year, 2 months and 3 days');
+    assert(Period($hours: 2, $minutes: 5)->human(Locale::de()) == '2 Stunden und 5 Minuten');
+    assert(Period::days(1)->human(Locale::fr()) == '1 jour');
+    assert(Period::zero()->human(Locale::fr()) == '0 seconde');
+    assert(Period::weeks(2)->human(Locale::it()) == '2 settimane');
+}

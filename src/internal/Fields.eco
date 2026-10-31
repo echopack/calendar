@@ -1,0 +1,424 @@
+namespace calendar;
+
+/**
+ * What a pattern read out of text, field by field, before it becomes a value. Nothing is
+ * filled in from the clock: a field the text did not have stays null, and the value that
+ * needs it reports it missing.
+ */
+internal struct Fields
+{
+    internal int64? $era = null;
+    internal int64? $yearOfEra = null;
+    internal int64? $year = null;
+    internal int64? $weekYear = null;
+    internal int64? $week = null;
+    internal int64? $quarter = null;
+    internal int64? $month = null;
+    internal int64? $day = null;
+    internal int64? $dayOfYear = null;
+    internal int64? $weekday = null;
+    internal int64? $localWeekday = null;
+    internal int64? $period = null;
+    internal int64? $hour = null;
+    internal int64? $hour12 = null;
+    internal int64? $minute = null;
+    internal int64? $second = null;
+    internal int64? $nanos = null;
+    internal Offset? $offset = null;
+    internal usize $offsetAt = 0;
+    internal Zone? $zone = null;
+
+    internal static function read(const Format& $format, const string& $text, ZoneSource $zones) : result<Fields, ParseError>
+    {
+        Fields $f = Fields();
+        Scanner $s = Scanner($text);
+        Locale $names = $format->names;
+
+        foreach ($format->tokens as const &$t) {
+            usize $at = $s->at;
+            Letter $l = $t->letter;
+            int32 $n = $t->count;
+
+            if ($l == Letter::text) {
+                if ($at + $t->text->size() > $text->size() || !$text->sub($at, $t->text->size())->equals($t->text)) {
+                    return .error(.expected($at, "'{$t->text}'"));
+                }
+
+                $s->at = $at + $t->text->size();
+                continue;
+            }
+
+            if ($l == Letter::era) {
+                int64 $era = guard $s->name($names->erasWide) ?? $s->name($names->eras) else {
+                    return .error(.expected($at, 'an era'));
+                };
+
+                $f->era = $era;
+            } else if ($l == Letter::year || $l == Letter::weekYear || $l == Letter::signedYear) {
+                int64 $sign = 1;
+
+                if ($l == Letter::signedYear && $s->eat(45)) {
+                    $sign = -1;
+                }
+
+                int32 $min = $n;
+                int32 $max = $n;
+
+                if ($n == 1) {
+                    $max = 9;
+                }
+
+                usize $digitsAt = $s->at;
+                int64 $v = guard $s->digits($min, $max) else {
+                    return .error(.expected($digitsAt, 'a year'));
+                };
+
+                if ($n == 2) {
+                    $v = $format->pivot + floorMod($v - $format->pivot, 100);
+                }
+
+                if ($l == Letter::year) {
+                    $f->yearOfEra = $v;
+                } else if ($l == Letter::weekYear) {
+                    $f->weekYear = $v;
+                } else {
+                    $f->year = $v * $sign;
+                }
+            } else if (($l == Letter::month || $l == Letter::monthAlone) && $n >= 3) {
+                int64 $m = guard $s->name($names->monthNames($n, $l == Letter::monthAlone)) else {
+                    return .error(.expected($at, 'a month name'));
+                };
+
+                $f->month = $m + 1;
+            } else if ($l == Letter::weekday || (($l == Letter::localWeekday || $l == Letter::localWeekdayAlone) && $n >= 3)) {
+                int64 $w = guard $s->name($names->weekdayNames($n)) else {
+                    return .error(.expected($at, 'a weekday name'));
+                };
+
+                $f->weekday = $w + 1;
+            } else if (($l == Letter::quarter || $l == Letter::quarterAlone) && $n >= 3) {
+                int64 $q = guard $s->name($names->quarters) ?? $s->name($names->quartersShort) else {
+                    return .error(.expected($at, 'a quarter'));
+                };
+
+                $f->quarter = $q + 1;
+            } else if ($l == Letter::dayPeriod) {
+                int64 $p = guard $s->name($names->dayPeriods) else {
+                    return .error(.expected($at, 'AM or PM'));
+                };
+
+                $f->period = $p;
+            } else if ($l == Letter::fraction) {
+                int64 $v = guard $s->fraction($n, $n) else {
+                    return .error(.expected($at, "{$n} fraction digits"));
+                };
+
+                $f->nanos = $v;
+            } else if ($l == Letter::zoneId) {
+                usize $start = $s->at;
+
+                // the bytes SystemZones::valid takes, except that a full stop ends the name
+                while (!$s->done() && $s->peek() != 46 && SystemZones::idByte($s->peek())) {
+                    $s->at = $s->at + 1;
+                }
+
+                string $id = string::from($text->sub($start, $s->at - $start));
+
+                if ($id->empty()) {
+                    return .error(.expected($at, 'a zone name'));
+                }
+
+                Zone $zone = guard $zones->load($id) else {
+                    return .error(.unknownZone($id, $start));
+                };
+
+                $f->zone = $zone;
+            } else if ($l == Letter::zoneName) {
+                return .error(.expected($at, "a pattern with 'VV' or an offset; abbreviations like 'z' are ambiguous"));
+            } else if ($l == Letter::offset || $l == Letter::offsetZ || $l == Letter::offsetX || $l == Letter::offsetGmt) {
+                Offset $o = guard Fields::offset($s, $l == Letter::offsetGmt || ($l == Letter::offset && $n == 4)) else ($e) {
+                    return .error($e);
+                };
+
+                $f->offset = $o;
+                $f->offsetAt = $at;
+            } else {
+                // the numeric fields
+                int32 $max = 2;
+
+                if ($l == Letter::dayOfYear) {
+                    $max = 3;
+                } else if ($n == 1 && ($l == Letter::quarter || $l == Letter::quarterAlone || $l == Letter::localWeekday || $l == Letter::localWeekdayAlone)) {
+                    $max = 1;
+                }
+
+                int64 $v = guard $s->digits($n, $max) else {
+                    return .error(.expected($at, 'a number'));
+                };
+
+                guard Fields::store($f, $l, $v, $at) else ($e) {
+                    return .error($e);
+                };
+            }
+        }
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        return .ok($f);
+    }
+
+    internal const function date(WeekRule $rule) : result<Date, ParseError>
+    {
+        int64? $year = $this->year;
+
+        if ($year == null && $this->yearOfEra != null) {
+            int64 $ofEra = guard $this->yearOfEra;
+            $year = $ofEra;
+
+            if (($this->era ?? 1) == 0) {
+                $year = 1 - $ofEra;
+            }
+        }
+
+        int64? $weekday = $this->weekday;
+
+        if ($weekday == null && $this->localWeekday != null) {
+            int64 $local = guard $this->localWeekday;
+            $weekday = $rule->firstDay->plus($local - 1)->number() as int64;
+        }
+
+        Date? $found = null;
+
+        if ($this->weekYear != null && $this->week != null && $this->month == null && $this->dayOfYear == null) {
+            int64 $wy = guard $this->weekYear;
+            int64 $w = guard $this->week;
+            int64 $wd = guard $weekday else {
+                return .error(.missing(.weekday));
+            };
+
+            if ($wy < MIN_YEAR || $wy > MAX_YEAR || $w > ($rule->weeks($wy as int32) as int64)) {
+                return .error(.mismatch(.week));
+            }
+
+            Weekday $day = guard Weekday::of($wd);
+            return .ok(Date(week: Week($wy as int32, $w as int32), $day, $rule));
+        }
+
+        int64 $y = guard $year else {
+            return .error(.missing(.year));
+        };
+
+        if ($this->dayOfYear != null) {
+            int64 $doy = guard $this->dayOfYear;
+            int64 $length = 365;
+
+            if ($y >= MIN_YEAR && $y <= MAX_YEAR && Date::leap($y as int32)) {
+                $length = 366;
+            }
+
+            if ($y < MIN_YEAR || $y > MAX_YEAR || $doy > $length) {
+                return .error(.impossible(.outOfRange(.dayOfYear, $doy)));
+            }
+
+            $found = Date(epochDay: Date::serial($y, 1, 1) + $doy - 1);
+        } else {
+            int64 $m = guard $this->month else {
+                return .error(.missing(.month));
+            };
+
+            int64 $d = guard $this->day else {
+                return .error(.missing(.day));
+            };
+
+            Date $made = guard Date::of($y, $m, $d) else ($e) {
+                return .error(.impossible($e));
+            };
+
+            $found = $made;
+        }
+
+        Date $date = guard $found;
+
+        if (($weekday ?? ($date->weekday()->number() as int64)) != ($date->weekday()->number() as int64)) {
+            return .error(.mismatch(.weekday));
+        }
+
+        if (($this->quarter ?? ($date->quarter() as int64)) != ($date->quarter() as int64)) {
+            return .error(.mismatch(.quarter));
+        }
+
+        return .ok($date);
+    }
+
+    internal const function time() : result<Time, ParseError>
+    {
+        int64? $hour = $this->hour;
+
+        if ($hour == null) {
+            int64 $h12 = guard $this->hour12 else {
+                return .error(.missing(.hour));
+            };
+
+            int64 $p = guard $this->period else {
+                return .error(.missing(.dayPeriod));
+            };
+
+            $hour = $h12 + $p * 12;
+        } else if ($this->period != null) {
+            int64 $h = guard $hour;
+            int64 $p = guard $this->period;
+
+            if (($h >= 12) != ($p == 1)) {
+                return .error(.mismatch(.dayPeriod));
+            }
+        }
+
+        int64 $h = guard $hour;
+        Time $t = guard Time::of($h, $this->minute ?? 0, $this->second ?? 0, $this->nanos ?? 0) else ($e) {
+            return .error(.impossible($e));
+        };
+
+        return .ok($t);
+    }
+
+    private static function store(Fields& $f, Letter $l, int64 $v, usize $at) : status<ParseError>
+    {
+        if ($l == Letter::month || $l == Letter::monthAlone) {
+            if ($v < 1 || $v > 12) {
+                return .error(.invalid(.month, $v, $at));
+            }
+
+            $f->month = $v;
+        } else if ($l == Letter::day) {
+            if ($v < 1 || $v > 31) {
+                return .error(.invalid(.day, $v, $at));
+            }
+
+            $f->day = $v;
+        } else if ($l == Letter::dayOfYear) {
+            if ($v < 1 || $v > 366) {
+                return .error(.invalid(.dayOfYear, $v, $at));
+            }
+
+            $f->dayOfYear = $v;
+        } else if ($l == Letter::week) {
+            if ($v < 1 || $v > 53) {
+                return .error(.invalid(.week, $v, $at));
+            }
+
+            $f->week = $v;
+        } else if ($l == Letter::quarter || $l == Letter::quarterAlone) {
+            if ($v < 1 || $v > 4) {
+                return .error(.invalid(.quarter, $v, $at));
+            }
+
+            $f->quarter = $v;
+        } else if ($l == Letter::localWeekday || $l == Letter::localWeekdayAlone) {
+            if ($v < 1 || $v > 7) {
+                return .error(.invalid(.weekday, $v, $at));
+            }
+
+            $f->localWeekday = $v;
+        } else if ($l == Letter::hour) {
+            if ($v > 23) {
+                return .error(.invalid(.hour, $v, $at));
+            }
+
+            $f->hour = $v;
+        } else if ($l == Letter::hour24) {
+            if ($v < 1 || $v > 24) {
+                return .error(.invalid(.hour, $v, $at));
+            }
+
+            $f->hour = $v % 24;
+        } else if ($l == Letter::hour12) {
+            if ($v < 1 || $v > 12) {
+                return .error(.invalid(.hour, $v, $at));
+            }
+
+            $f->hour12 = $v % 12;
+        } else if ($l == Letter::hour11) {
+            if ($v > 11) {
+                return .error(.invalid(.hour, $v, $at));
+            }
+
+            $f->hour12 = $v;
+        } else if ($l == Letter::minute) {
+            if ($v > 59) {
+                return .error(.invalid(.minute, $v, $at));
+            }
+
+            $f->minute = $v;
+        } else if ($l == Letter::second) {
+            if ($v > 60) {
+                return .error(.invalid(.second, $v, $at));
+            }
+
+            // a leap second reads as :59
+            if ($v == 60) {
+                $f->second = 59;
+            } else {
+                $f->second = $v;
+            }
+        }
+
+        return .ok;
+    }
+
+    // Z, +01, +0100, +01:00, +01:00:30, or GMT followed by any of those or nothing
+    private static function offset(Scanner& $s, bool $gmt) : result<Offset, ParseError>
+    {
+        if ($gmt || $s->peek() == 71) {
+            if ($s->word('GMT') || $s->word('UTC')) {
+                uint8 $c = $s->peek();
+
+                if ($c != 43 && $c != 45) {
+                    return .ok(Offset(0));
+                }
+
+                return Fields::loose($s);
+            }
+
+            if ($gmt) {
+                return .error(.expected($s->at, "'GMT'"));
+            }
+        }
+
+        return Offset::scan($s);
+    }
+
+    // +h, +h:mm after GMT, where the hour may be one digit
+    private static function loose(Scanner& $s) : result<Offset, ParseError>
+    {
+        int64 $sign = 1;
+
+        if ($s->eat(45)) {
+            $sign = -1;
+        } else {
+            $s->eat(43);
+        }
+
+        usize $at = $s->at;
+        int64 $hours = guard $s->digits(1, 2) else {
+            return .error(.expected($at, 'an hour'));
+        };
+
+        int64 $minutes = 0;
+
+        if ($s->eat(58)) {
+            int64 $m = guard $s->digits(2, 2) else {
+                return .error(.expected($s->at, 'two-digit minutes'));
+            };
+
+            $minutes = $m;
+        }
+
+        if ($hours > 25 || $minutes > 59) {
+            return .error(.invalid(.offset, $hours, $at));
+        }
+
+        return .ok(Offset((($hours * 3600 + $minutes * 60) * $sign) as int32));
+    }
+}

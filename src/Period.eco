@@ -1,0 +1,352 @@
+namespace calendar;
+
+use std::time;
+
+/**
+ * An amount of calendar time: so many years, months, weeks, days and clock units.
+ *
+ * Not a length. One month is 28 to 31 days depending on where it is added, and one day in a
+ * zone can be 23 or 25 hours. Fields are kept as written and never folded into each other,
+ * so `Period::days(1)` and `Period::hours(24)` stay different things. Each field carries its
+ * own sign.
+ *
+ * Build one with the field names, `Period($months: 1, $days: 2)`, or a single-unit static,
+ * `Period::days(3)`.
+ */
+public struct Period
+{
+    public const int64 $years = 0;
+    public const int64 $months = 0;
+    public const int64 $weeks = 0;
+    public const int64 $days = 0;
+    public const int64 $hours = 0;
+    public const int64 $minutes = 0;
+    public const int64 $seconds = 0;
+    public const int64 $nanoseconds = 0;
+
+    public static function zero() : Period
+    {
+        return Period();
+    }
+
+    public static function years(int64 $n) : Period
+    {
+        return Period($years: $n);
+    }
+
+    public static function months(int64 $n) : Period
+    {
+        return Period($months: $n);
+    }
+
+    public static function weeks(int64 $n) : Period
+    {
+        return Period($weeks: $n);
+    }
+
+    public static function days(int64 $n) : Period
+    {
+        return Period($days: $n);
+    }
+
+    public static function hours(int64 $n) : Period
+    {
+        return Period($hours: $n);
+    }
+
+    public static function minutes(int64 $n) : Period
+    {
+        return Period($minutes: $n);
+    }
+
+    public static function seconds(int64 $n) : Period
+    {
+        return Period($seconds: $n);
+    }
+
+    public static function nanoseconds(int64 $n) : Period
+    {
+        return Period($nanoseconds: $n);
+    }
+
+    /**
+     * True when every field is zero.
+     */
+    public const function empty() : bool
+    {
+        return $this->dated() && $this->years == 0 && $this->months == 0 && $this->weeks == 0
+            && $this->days == 0;
+    }
+
+    /**
+     * True when only years, months, weeks and days are set: what a `Date` can take.
+     */
+    public const function dated() : bool
+    {
+        return $this->hours == 0 && $this->minutes == 0 && $this->seconds == 0 && $this->nanoseconds == 0;
+    }
+
+    /**
+     * The fields that are set, written out: `1 year, 2 months and 3 days`, `2 Stunden und 5
+     * Minuten`. Nanoseconds are left out. An empty period is `0 seconds`.
+     */
+    public const function human(Locale $locale = Locale::en()) : string
+    {
+        array<string> $parts = [];
+        Period::part($parts, $locale, $this->years, .year);
+        Period::part($parts, $locale, $this->months, .month);
+        Period::part($parts, $locale, $this->weeks, .week);
+        Period::part($parts, $locale, $this->days, .day);
+        Period::part($parts, $locale, $this->hours, .hour);
+        Period::part($parts, $locale, $this->minutes, .minute);
+        Period::part($parts, $locale, $this->seconds, .second);
+
+        if ($parts->empty()) {
+            return $locale->count(0, .second);
+        }
+
+        string $out = '';
+
+        foreach ($parts as $i => const &$part) {
+            if ($i > 0 && $i + 1 == $parts->count()) {
+                $out->append(' ');
+                $out->append($locale->and);
+                $out->append(' ');
+            } else if ($i > 0) {
+                $out->append(', ');
+            }
+
+            $out->append($part);
+        }
+
+        return $out;
+    }
+
+    private static function part(array<string>& $parts, Locale $locale, int64 $value, Unit $unit) : void
+    {
+        if ($value != 0) {
+            $parts[] = $locale->count($value, $unit);
+        }
+    }
+
+    /**
+     * Months in the year and month fields together.
+     */
+    internal const function totalMonths() : int64
+    {
+        return $this->years * 12 + $this->months;
+    }
+
+    /**
+     * Days in the week and day fields together.
+     */
+    internal const function totalDays() : int64
+    {
+        return $this->weeks * 7 + $this->days;
+    }
+
+    /**
+     * The clock fields as an exact length: hours, minutes, seconds and nanoseconds.
+     */
+    public const function exact() : time::duration
+    {
+        return time::duration::hours($this->hours) + time::duration::mins($this->minutes)
+            + time::duration::secs($this->seconds) + time::duration::nanos($this->nanoseconds);
+    }
+
+    // whole months, days and an exact remainder in nanoseconds, spread over the fields
+    internal static function split(int64 $months, int64 $days, int64 $nanos) : Period
+    {
+        return Period(
+            $years: $months / 12,
+            $months: $months % 12,
+            $days: $days,
+            $hours: $nanos / NANOS_PER_HOUR,
+            $minutes: ($nanos / NANOS_PER_MINUTE) % 60,
+            $seconds: ($nanos / NANOS_PER_SEC) % 60,
+            $nanoseconds: $nanos % NANOS_PER_SEC,
+        );
+    }
+
+    /**
+     * Parse an ISO 8601 duration: `P1Y2M3W4DT5H6M7.5S`, `PT0S`, `-P3D`. A leading sign
+     * applies to every field; a fraction is only allowed on seconds.
+     */
+    public static function parse(const string& $text) : result<Period, ParseError>
+    {
+        Scanner $s = Scanner($text);
+        int64 $sign = 1;
+
+        if ($s->eat(45)) {
+            $sign = -1;
+        } else {
+            $s->eat(43);
+        }
+
+        if (!$s->eat(80) && !$s->eat(112)) {
+            return .error(.expected($s->at, "'P'"));
+        }
+
+        fixed_array<int64, 8> $f = [0, 0, 0, 0, 0, 0, 0, 0];
+        bool $any = false;
+        bool $clock = false;
+        int32 $last = -1;
+
+        while (!$s->done()) {
+            if (!$clock && ($s->eat(84) || $s->eat(116))) {
+                $clock = true;
+
+                if ($s->done()) {
+                    return .error(.expected($s->at, 'a clock field after T'));
+                }
+
+                continue;
+            }
+
+            usize $at = $s->at;
+            int64 $n = guard $s->digits(1, 18) else {
+                return .error(.expected($at, 'a number'));
+            };
+
+            int64 $nanos = 0;
+
+            if ($s->eat(46) || $s->eat(44)) {
+                int64 $read = guard $s->fraction() else {
+                    return .error(.expected($s->at, 'a digit'));
+                };
+                $nanos = $read;
+
+                if (!$clock || ($s->peek() != 83 && $s->peek() != 115)) {
+                    return .error(.expected($at, 'a fraction only on seconds'));
+                }
+            }
+
+            uint8 $u = $s->peek();
+            int32 $slot = Period::slot($u, $clock);
+
+            if ($slot <= $last) {
+                return .error(.expected($s->at, 'a unit designator in order'));
+            }
+
+            $s->eat($u);
+            $f[$slot] = $n;
+
+            if ($slot == 6) {
+                $f[7] = $nanos;
+            }
+
+            $last = $slot;
+            $any = true;
+        }
+
+        if (!$any) {
+            return .error(.expected($s->at, 'at least one field'));
+        }
+
+        return .ok(Period(
+            $years: $f[0] * $sign,
+            $months: $f[1] * $sign,
+            $weeks: $f[2] * $sign,
+            $days: $f[3] * $sign,
+            $hours: $f[4] * $sign,
+            $minutes: $f[5] * $sign,
+            $seconds: $f[6] * $sign,
+            $nanoseconds: $f[7] * $sign,
+        ));
+    }
+
+    // index of a designator in field order, -1 when it is not one. M is months before T and
+    // minutes after it
+    private static function slot(uint8 $c, bool $clock) : int32
+    {
+        uint8 $u = $c;
+
+        if ($u >= 97 && $u <= 122) {
+            $u = $u - 32;
+        }
+
+        if ($clock) {
+            if ($u == 72) {
+                return 4;
+            }
+
+            if ($u == 77) {
+                return 5;
+            }
+
+            if ($u == 83) {
+                return 6;
+            }
+
+            return -1;
+        }
+
+        if ($u == 89) {
+            return 0;
+        }
+
+        if ($u == 77) {
+            return 1;
+        }
+
+        if ($u == 87) {
+            return 2;
+        }
+
+        if ($u == 68) {
+            return 3;
+        }
+
+        return -1;
+    }
+}
+
+operator (const Period& $a) + (const Period& $b) : Period
+{
+    return Period(
+        $years: $a->years + $b->years,
+        $months: $a->months + $b->months,
+        $weeks: $a->weeks + $b->weeks,
+        $days: $a->days + $b->days,
+        $hours: $a->hours + $b->hours,
+        $minutes: $a->minutes + $b->minutes,
+        $seconds: $a->seconds + $b->seconds,
+        $nanoseconds: $a->nanoseconds + $b->nanoseconds,
+    );
+}
+
+operator -(const Period& $a) : Period
+{
+    return $a * -1;
+}
+
+operator (const Period& $a) - (const Period& $b) : Period
+{
+    return $a + -$b;
+}
+
+operator (const Period& $a) * (int64 $n) : Period
+{
+    return Period(
+        $years: $a->years * $n,
+        $months: $a->months * $n,
+        $weeks: $a->weeks * $n,
+        $days: $a->days * $n,
+        $hours: $a->hours * $n,
+        $minutes: $a->minutes * $n,
+        $seconds: $a->seconds * $n,
+        $nanoseconds: $a->nanoseconds * $n,
+    );
+}
+
+operator (const Period& $a) == (const Period& $b) : bool
+{
+    return $a->years == $b->years && $a->months == $b->months && $a->weeks == $b->weeks
+        && $a->days == $b->days && $a->hours == $b->hours && $a->minutes == $b->minutes
+        && $a->seconds == $b->seconds && $a->nanoseconds == $b->nanoseconds;
+}
+
+operator (const Period& $a) != (const Period& $b) : bool
+{
+    return !($a == $b);
+}

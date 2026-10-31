@@ -1,0 +1,51 @@
+namespace calendar;
+
+internal function englishLocale(const string& $id, WeekRule $rule) : Locale
+{
+    array<string> $months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    array<string> $monthsShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    array<string> $monthsStandaloneShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    array<string> $monthsNarrow = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
+    array<string> $weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    array<string> $weekdaysShort = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    array<string> $weekdaysNarrow = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    array<string> $quarters = ['1st quarter', '2nd quarter', '3rd quarter', '4th quarter'];
+    array<string> $quartersShort = ['Q1', 'Q2', 'Q3', 'Q4'];
+    array<string> $eras = ['BC', 'AD'];
+    array<string> $erasWide = ['Before Christ', 'Anno Domini'];
+    array<string> $dayPeriods = ['AM', 'PM'];
+    array<string> $units = ['year', 'years', 'month', 'months', 'week', 'weeks', 'day', 'days', 'hour', 'hours', 'minute', 'minutes', 'second', 'seconds'];
+    array<string> $relative = [
+        'in # year', 'in # years', '# year ago', '# years ago',
+        'in # month', 'in # months', '# month ago', '# months ago',
+        'in # week', 'in # weeks', '# week ago', '# weeks ago',
+        'in # day', 'in # days', '# day ago', '# days ago',
+        'in # hour', 'in # hours', '# hour ago', '# hours ago',
+        'in # minute', 'in # minutes', '# minute ago', '# minutes ago',
+        'in # second', 'in # seconds', '# second ago', '# seconds ago',
+    ];
+    array<string> $nearDays = ['yesterday', 'today', 'tomorrow'];
+
+    return Locale(
+        $id: $id,
+        $months: $months,
+        $monthsShort: $monthsShort,
+        $monthsStandaloneShort: $monthsStandaloneShort,
+        $monthsNarrow: $monthsNarrow,
+        $weekdays: $weekdays,
+        $weekdaysShort: $weekdaysShort,
+        $weekdaysNarrow: $weekdaysNarrow,
+        $quarters: $quarters,
+        $quartersShort: $quartersShort,
+        $eras: $eras,
+        $erasWide: $erasWide,
+        $dayPeriods: $dayPeriods,
+        $weekRule: $rule,
+        $plural: .one,
+        $units: $units,
+        $relative: $relative,
+        $nearDays: $nearDays,
+        $now: 'now',
+        $and: 'and',
+    );
+}

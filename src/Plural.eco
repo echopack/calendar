@@ -1,0 +1,33 @@
+namespace calendar;
+
+use std::math;
+
+/**
+ * Which counts take the singular form in a language. Enough for the built-in locales; a
+ * language with more plural forms needs more cases here.
+ */
+public enum Plural
+{
+    /**
+     * Only 1 is singular: "1 day", "0 days". English, German, Italian.
+     */
+    case one;
+
+    /**
+     * 0 and 1 are singular: "0 jour", "1 jour", "2 jours". French.
+     */
+    case zeroAndOne;
+
+    /**
+     * True when `$count` takes the singular form.
+     */
+    public const function singular(int64 $count) : bool
+    {
+        int64 $n = math::abs($count);
+
+        return match ($this) {
+            .one => $n == 1,
+            .zeroAndOne => $n <= 1,
+        };
+    }
+}

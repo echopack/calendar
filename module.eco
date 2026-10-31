@@ -1,0 +1,10 @@
+#[module: "calendar"]
+#[version: "0.1.0"] // x-release-please-version
+#[epm::license: "MIT"]
+#[epm::description: "Calendar, Date handling and formatting for Echo"]
+
+#[sources: ["src/*.eco", "src/internal/*.eco", "src/locales/*.eco"]]
+
+#[target: test] {
+    #[sources: "tests/*.eco"]
+}

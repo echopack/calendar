@@ -1,0 +1,56 @@
+namespace calendar;
+
+/**
+ * Where a week starts and which week is week 1.
+ *
+ * Week 1 of a year is the first week with at least `$minimalDays` days in that year. The ISO
+ * rule (Monday, 4) puts the first Thursday in week 1. A rule is always passed in; nothing
+ * changes it behind your back.
+ */
+public struct WeekRule
+{
+    public const Weekday $firstDay;
+    public const int32 $minimalDays;
+
+    constructor(Weekday $firstDay, int32 $minimalDays)
+    {
+        if ($minimalDays < 1 || $minimalDays > 7) {
+            die("calendar: a week rule needs 1 to 7 minimal days, not {$minimalDays}");
+        }
+
+        $this->firstDay = $firstDay;
+        $this->minimalDays = $minimalDays;
+    }
+
+    /**
+     * ISO 8601: weeks start on Monday and week 1 holds the first Thursday.
+     */
+    public static function iso() : WeekRule
+    {
+        return WeekRule(.monday, 4);
+    }
+
+    /**
+     * Epoch day of the first day of week 1 of `$year`.
+     */
+    internal const function first(int64 $year) : int64
+    {
+        int64 $jan1 = Date::serial($year, 1, 1);
+        int64 $back = $this->firstDay->until(Date::weekdayOf($jan1));
+        int64 $start = $jan1 - $back;
+
+        if (7 - $back < ($this->minimalDays as int64)) {
+            return $start + 7;
+        }
+
+        return $start;
+    }
+
+    /**
+     * How many weeks the week-based `$year` has under this rule: 52 or 53.
+     */
+    public const function weeks(int32 $year) : int32
+    {
+        return (($this->first(($year as int64) + 1) - $this->first($year as int64)) / 7) as int32;
+    }
+}

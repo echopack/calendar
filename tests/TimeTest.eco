@@ -1,0 +1,53 @@
+use calendar::{Time, Unit, Rounding};
+use std::time;
+
+test time_basics
+{
+    $t = Time(14, 5);
+    assert(str::from($t) == '14:05:00');
+    assert(str::from(Time(9, 30, 15, 500000000)) == '09:30:15.500');
+    assert(str::from(Time(0, 0, 0, 1500)) == '00:00:00.000001500');
+    assert(Time(nanos: $t->nanos()) == $t);
+    assert(Time::of(24, 0)->failed());
+    assert(str::from(Time::of(12, 60)->failure()) == 'minute 60 is out of range');
+}
+
+test time_wraps
+{
+    assert(str::from(Time(23) + time::duration::hours(2)) == '01:00:00');
+    assert(str::from(Time(1) - time::duration::hours(2)) == '23:00:00');
+    assert(str::from(Time(12) + time::duration::hours(48)) == '12:00:00');
+    assert(Time(22)->until(Time(2)) == time::duration::hours(-20));
+    assert(Time(9)->until(Time(17, 30), .hour) == 8);
+    assert(Time(9)->until(Time(17, 30), .hour, .halfExpand) == 9);
+}
+
+test time_round
+{
+    $t = Time(14, 35, 40);
+    assert(str::from($t->round(.minute)) == '14:36:00');
+    assert(str::from($t->round(.hour)) == '15:00:00');
+    assert(str::from($t->start(.hour)) == '14:00:00');
+    assert(str::from(Time(23, 59, 59, 600000000)->round(.second)) == '00:00:00');
+}
+
+test time_parse
+{
+    Time $a = guard Time::parse('14:05');
+    assert($a == Time(14, 5));
+    Time $b = guard Time::parse('14:05:09.25');
+    assert($b == Time(14, 5, 9, 250000000));
+    Time $leap = guard Time::parse('23:59:60');
+    assert($leap == Time(23, 59, 59));
+    assert(str::from(Time::parse('24:00')->failure()) == 'hour 24 at byte 0 is out of range');
+    assert(Time::parse('14:5')->failed());
+    assert(Time::parse('14:05:')->failed());
+}
+
+test time_rounds_sub_second_units
+{
+    $t = Time(14, 5, 9, 123456789);
+    assert($t->round(.millisecond) == Time(14, 5, 9, 123000000));
+    assert($t->round(.microsecond) == Time(14, 5, 9, 123457000));
+    assert($t->round(.nanosecond) == $t);
+}

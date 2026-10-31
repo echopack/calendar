@@ -1,0 +1,50 @@
+namespace calendar;
+
+/**
+ * The day part of a POSIX TZ rule: `Jn` (1 to 365, February 29 never counted), `n` (0 to 365,
+ * counting it) or `Mm.w.d` (weekday `d`, Sunday 0, of week `w` of month `m`, 5 meaning last).
+ */
+internal struct RuleDate
+{
+    internal const int32 $kind;
+    internal const int32 $month;
+    internal const int32 $week;
+    internal const int32 $day;
+
+    /**
+     * The epoch day this rule picks in `$year`.
+     */
+    internal const function serial(int64 $year) : int64
+    {
+        int64 $jan1 = Date::serial($year, 1, 1);
+
+        if ($this->kind == 0) {
+            int64 $n = $this->day as int64;
+
+            if (Date::leap($year as int32) && $n >= 60) {
+                $n = $n + 1;
+            }
+
+            return $jan1 + $n - 1;
+        }
+
+        if ($this->kind == 1) {
+            return $jan1 + ($this->day as int64);
+        }
+
+        int64 $m = $this->month as int64;
+        int64 $first = Date::serial($year, $m, 1);
+        Month $month = guard Month::of($m);
+        int64 $length = $month->days($year as int32) as int64;
+
+        // the rule counts weekdays from Sunday 0
+        Weekday $target = guard Weekday::of(floorMod(($this->day as int64) - 1, 7) + 1);
+        int64 $day = $first + Date::weekdayOf($first)->until($target) + (($this->week - 1) as int64) * 7;
+
+        while ($day >= $first + $length) {
+            $day = $day - 7;
+        }
+
+        return $day;
+    }
+}
