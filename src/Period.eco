@@ -12,58 +12,127 @@ use std::time;
  *
  * Build one with the field names, `Period($months: 1, $days: 2)`, or a single-unit static,
  * `Period::days(3)`.
+ *
+ * ```echo
+ * $p = Period($days: 14, $hours: 12);
+ * echo "{$p}";                                    // P14DT12H
+ * echo $p->human();                               // 14 days and 12 hours
+ * $same = Period::days(1) == Period::hours(24);
+ * echo "{$same}";                                 // false
+ * ```
  */
+#[docs::see: ["Date", "Zoned", "Relative"]]
 public struct Period
 {
+    /**
+     * Whole years. On a date they count as twelve months each.
+     */
     public const int64 $years = 0;
+
+    /**
+     * Whole months, kept apart from years: `Period::months(14)` stays 14 months.
+     */
     public const int64 $months = 0;
+
+    /**
+     * Whole weeks. On a date they count as seven days each.
+     */
     public const int64 $weeks = 0;
+
+    /**
+     * Calendar days. In a zone a day can be 23 or 25 hours; it is never folded into hours.
+     */
     public const int64 $days = 0;
+
+    /**
+     * Hours, an exact length on the clock.
+     */
     public const int64 $hours = 0;
+
+    /**
+     * Minutes. Never carried into hours: 90 minutes stays 90 minutes.
+     */
     public const int64 $minutes = 0;
+
+    /**
+     * Whole seconds. A parsed fraction of a second lands in `$nanoseconds`.
+     */
     public const int64 $seconds = 0;
+
+    /**
+     * Nanoseconds, the fraction of a second. Not limited to below one second.
+     */
     public const int64 $nanoseconds = 0;
 
+    /**
+     * The empty period, every field zero.
+     */
     public static function zero() : Period
     {
         return Period();
     }
 
+    /**
+     * A period of `$n` years.
+     */
     public static function years(int64 $n) : Period
     {
         return Period($years: $n);
     }
 
+    /**
+     * A period of `$n` months. Added to a date, the day clamps when the target month is
+     * shorter: 2026-01-31 plus one month is 2026-02-28.
+     */
     public static function months(int64 $n) : Period
     {
         return Period($months: $n);
     }
 
+    /**
+     * A period of `$n` weeks.
+     */
     public static function weeks(int64 $n) : Period
     {
         return Period($weeks: $n);
     }
 
+    /**
+     * A period of `$n` calendar days.
+     */
     public static function days(int64 $n) : Period
     {
         return Period($days: $n);
     }
 
+    /**
+     * A period of `$n` hours. Not the same as days: `Period::hours(24)` is not
+     * `Period::days(1)`.
+     */
     public static function hours(int64 $n) : Period
     {
         return Period($hours: $n);
     }
 
+    /**
+     * A period of `$n` minutes.
+     */
     public static function minutes(int64 $n) : Period
     {
         return Period($minutes: $n);
     }
 
+    /**
+     * A period of `$n` seconds.
+     */
     public static function seconds(int64 $n) : Period
     {
         return Period($seconds: $n);
     }
 
+    /**
+     * A period of `$n` nanoseconds.
+     */
     public static function nanoseconds(int64 $n) : Period
     {
         return Period($nanoseconds: $n);
@@ -81,6 +150,7 @@ public struct Period
     /**
      * True when only years, months, weeks and days are set: what a `Date` can take.
      */
+    #[inline]
     public const function dated() : bool
     {
         return $this->hours == 0 && $this->minutes == 0 && $this->seconds == 0 && $this->nanoseconds == 0;
@@ -132,6 +202,7 @@ public struct Period
     /**
      * Months in the year and month fields together.
      */
+    #[inline]
     internal const function totalMonths() : int64
     {
         return $this->years * 12 + $this->months;
@@ -140,6 +211,7 @@ public struct Period
     /**
      * Days in the week and day fields together.
      */
+    #[inline]
     internal const function totalDays() : int64
     {
         return $this->weeks * 7 + $this->days;
@@ -157,6 +229,10 @@ public struct Period
     // whole months, days and an exact remainder in nanoseconds, spread over the fields
     internal static function split(int64 $months, int64 $days, int64 $nanos) : Period
     {
+        if ($nanos == 0) {
+            return Period($years: $months / 12, $months: $months % 12, $days: $days);
+        }
+
         return Period(
             $years: $months / 12,
             $months: $months % 12,
@@ -170,7 +246,8 @@ public struct Period
 
     /**
      * Parse an ISO 8601 duration: `P1Y2M3W4DT5H6M7.5S`, `PT0S`, `-P3D`. A leading sign
-     * applies to every field; a fraction is only allowed on seconds.
+     * applies to every field; a fraction is only allowed on seconds. A field may also carry
+     * its own minus, `P1M-3D`, which is how a period with mixed signs is written.
      */
     public static function parse(const string& $text) : result<Period, ParseError>
     {
@@ -204,8 +281,21 @@ public struct Period
             }
 
             usize $at = $s->at;
+
+            // a field may carry its own sign, as mixed periods are written
+            int64 $fieldSign = 1;
+
+            if ($s->eat(45)) {
+                if ($sign < 0) {
+                    return .error(.expected($at, 'no field sign after a leading one'));
+                }
+
+                $fieldSign = -1;
+            }
+
+            usize $numberAt = $s->at;
             int64 $n = guard $s->digits(1, 18) else {
-                return .error(.expected($at, 'a number'));
+                return .error(.expected($numberAt, 'a number'));
             };
 
             int64 $nanos = 0;
@@ -229,10 +319,10 @@ public struct Period
             }
 
             $s->eat($u);
-            $f[$slot] = $n;
+            $f[$slot] = $n * $fieldSign;
 
             if ($slot == 6) {
-                $f[7] = $nanos;
+                $f[7] = $nanos * $fieldSign;
             }
 
             $last = $slot;

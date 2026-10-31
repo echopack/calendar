@@ -1,0 +1,218 @@
+namespace calendar;
+
+/**
+ * Reader for mail and HTTP dates: RFC 5322 section 3.3 with the obsolete forms real mail
+ * still carries. `Thu, 1 Oct 2026 09:30 +0100`, `1 Oct 26 09:30:00 GMT` and a trailing
+ * `(comment)` all read. Names are English, as the RFC has them.
+ */
+internal struct Rfc2822
+{
+    internal static function read(const string& $text) : result<Fields, ParseError>
+    {
+        Fields $f = Fields();
+        Scanner $s = Scanner($text);
+        Locale $en = Locale::en();
+        Rfc2822::skip($s);
+
+        if (!Rfc2822::digit($s->peek())) {
+            usize $weekdayAt = $s->at;
+            int64 $w = guard $s->name($en->weekdaysShort) else {
+                return .error(.expected($weekdayAt, 'a weekday or a day'));
+            };
+
+            $f->weekday = $w + 1;
+            Rfc2822::skip($s);
+
+            if (!$s->eat(44)) {
+                return .error(.expected($s->at, "','"));
+            }
+
+            Rfc2822::skip($s);
+        }
+
+        usize $dayAt = $s->at;
+        int64 $day = guard $s->digits(1, 2) else {
+            return .error(.expected($dayAt, 'a day'));
+        };
+
+        if ($day < 1 || $day > 31) {
+            return .error(.invalid(.day, $day, $dayAt));
+        }
+
+        $f->day = $day;
+
+        if (!Rfc2822::skip($s)) {
+            return .error(.expected($s->at, 'a space'));
+        }
+
+        usize $monthAt = $s->at;
+        int64 $month = guard $s->name($en->monthsShort) else {
+            return .error(.expected($monthAt, 'a month name'));
+        };
+
+        $f->month = $month + 1;
+
+        if (!Rfc2822::skip($s)) {
+            return .error(.expected($s->at, 'a space'));
+        }
+
+        usize $yearAt = $s->at;
+        int64 $year = guard $s->digits(2, 4) else {
+            return .error(.expected($yearAt, 'a year'));
+        };
+
+        // RFC 5322 4.3: two digits below 50 are 20xx, other short years count from 1900
+        usize $width = $s->at - $yearAt;
+
+        if ($width == 2 && $year < 50) {
+            $year = $year + 2000;
+        } else if ($width < 4) {
+            $year = $year + 1900;
+        }
+
+        $f->year = $year;
+
+        if (!Rfc2822::skip($s)) {
+            return .error(.expected($s->at, 'a space'));
+        }
+
+        guard Rfc2822::clock($s, $f) else ($e) {
+            return .error($e);
+        };
+
+        if (!Rfc2822::skip($s)) {
+            return .error(.expected($s->at, 'a space'));
+        }
+
+        usize $zoneAt = $s->at;
+        Offset $o = guard Rfc2822::zone($s) else ($e) {
+            return .error($e);
+        };
+
+        $f->offset = $o;
+        $f->offsetAt = $zoneAt;
+        Rfc2822::skip($s);
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        return .ok($f);
+    }
+
+    // hh:mm, then :ss when there are seconds; a leap second reads as :59
+    private static function clock(Scanner& $s, Fields& $f) : status<ParseError>
+    {
+        usize $hourAt = $s->at;
+        int64 $hour = guard $s->digits(2, 2) else {
+            return .error(.expected($hourAt, 'a two-digit hour'));
+        };
+
+        if (!$s->eat(58)) {
+            return .error(.expected($s->at, "':'"));
+        }
+
+        usize $minuteAt = $s->at;
+        int64 $minute = guard $s->digits(2, 2) else {
+            return .error(.expected($minuteAt, 'a two-digit minute'));
+        };
+
+        int64 $second = 0;
+        usize $secondAt = $s->at;
+
+        if ($s->eat(58)) {
+            $secondAt = $s->at;
+            int64 $read = guard $s->digits(2, 2) else {
+                return .error(.expected($secondAt, 'a two-digit second'));
+            };
+            $second = $read;
+        }
+
+        if ($hour > 23) {
+            return .error(.invalid(.hour, $hour, $hourAt));
+        }
+
+        if ($minute > 59) {
+            return .error(.invalid(.minute, $minute, $minuteAt));
+        }
+
+        if ($second > 60) {
+            return .error(.invalid(.second, $second, $secondAt));
+        }
+
+        if ($second == 60) {
+            $second = 59;
+        }
+
+        $f->hour = $hour;
+        $f->minute = $minute;
+        $f->second = $second;
+        return .ok;
+    }
+
+    // +hhmm or -hhmm, or one of the zone names RFC 5322 keeps for old mail
+    private static function zone(Scanner& $s) : result<Offset, ParseError>
+    {
+        usize $at = $s->at;
+        uint8 $c = $s->peek();
+
+        if ($c == 43 || $c == 45) {
+            int64 $sign = 1;
+
+            if ($s->eat(45)) {
+                $sign = -1;
+            } else {
+                $s->eat(43);
+            }
+
+            int64 $hhmm = guard $s->digits(4, 4) else {
+                return .error(.expected($at, 'a zone like +0100'));
+            };
+
+            int64 $hours = $hhmm / 100;
+            int64 $minutes = $hhmm % 100;
+
+            if ($hours > 25 || $minutes > 59) {
+                return .error(.invalid(.offset, $hours, $at));
+            }
+
+            return .ok(Offset((($hours * 3600 + $minutes * 60) * $sign) as int32));
+        }
+
+        array<string> $names = ['UT', 'UTC', 'GMT', 'Z', 'EST', 'EDT', 'CST', 'CDT', 'MST', 'MDT', 'PST', 'PDT'];
+        array<int32> $hours = [0, 0, 0, 0, -5, -4, -6, -5, -7, -6, -8, -7];
+        int64 $i = guard $s->name($names) else {
+            return .error(.expected($at, 'a zone like +0100 or GMT'));
+        };
+
+        return .ok(Offset(hours: $hours[$i as usize]));
+    }
+
+    // folding white space and (comments); true when anything was skipped
+    private static function skip(Scanner& $s) : bool
+    {
+        usize $start = $s->at;
+        int32 $depth = 0;
+
+        while (!$s->done()) {
+            uint8 $c = $s->peek();
+
+            if ($c == 40) {
+                $depth++;
+            } else if ($c == 41 && $depth > 0) {
+                $depth--;
+            } else if ($depth == 0 && $c != 32 && $c != 9 && $c != 13 && $c != 10) {
+                break;
+            }
+
+            $s->at = $s->at + 1;
+        }
+
+        return $s->at > $start;
+    }
+
+    private static function digit(uint8 $c) : bool
+    {
+        return $c >= 48 && $c <= 57;
+    }
+}

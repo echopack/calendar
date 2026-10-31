@@ -25,7 +25,7 @@ internal struct PosixRule
             return null;
         };
 
-        int64 $stdWest = guard PosixRule::clock($s) else {
+        int64 $stdWest = guard PosixRule::offset($s) else {
             return null;
         };
 
@@ -43,7 +43,7 @@ internal struct PosixRule
         int64 $dstEast = -$stdWest + SECS_PER_HOUR;
 
         if (!$s->done() && $s->peek() != 44) {
-            int64 $dstWest = guard PosixRule::clock($s) else {
+            int64 $dstWest = guard PosixRule::offset($s) else {
                 return null;
             };
 
@@ -260,6 +260,20 @@ internal struct PosixRule
         }
 
         return string::from($s->text->sub($start, $s->at - $start));
+    }
+
+    // a clock reading that is an offset from UTC, which has to fit an Offset
+    private static function offset(Scanner& $s) : int64?
+    {
+        int64 $west = guard PosixRule::clock($s) else {
+            return null;
+        };
+
+        if ($west < -(MAX_OFFSET as int64) || $west > (MAX_OFFSET as int64)) {
+            return null;
+        }
+
+        return $west;
     }
 
     // [+-]h[h][:mm[:ss]] in seconds, hours up to 167 as POSIX extended allows

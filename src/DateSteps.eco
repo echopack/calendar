@@ -6,10 +6,25 @@ namespace calendar;
  */
 public struct DateSteps : contract::iterable<Date>, contract::const_iterable<Date>
 {
+    /**
+     * The first date, included when it is before `$end`.
+     */
     public const Date $start;
+
+    /**
+     * The bound the dates stay before, not included.
+     */
     public const Date $end;
+
+    /**
+     * The distance between dates, each counted from `$start`.
+     */
     public const Period $step;
 
+    /**
+     * The dates from `$start`, `$step` apart, before `$end`. A step that does not move forward,
+     * or that has hours, minutes or seconds, stops the program.
+     */
     constructor(Date $start, Date $end, Period $step)
     {
         Date::dated($step);
@@ -23,6 +38,9 @@ public struct DateSteps : contract::iterable<Date>, contract::const_iterable<Dat
         $this->step = $step;
     }
 
+    /**
+     * A cursor over the dates, which is what `foreach` uses.
+     */
     public function iterate() : DateCursor
     {
         return DateCursor($this->start, $this->end, $this->step);

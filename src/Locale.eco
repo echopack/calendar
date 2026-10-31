@@ -6,40 +6,151 @@ use std::math;
  * The words a language uses for dates: month and weekday names, eras, AM and PM, and the
  * phrases for relative times.
  *
+ * ```echo
+ * $de = Locale::de();
+ * echo $de->month(.march); // März
+ * echo $de->count(3, .day); // 3 Tage
+ * echo $de->relative(-2, .hour); // vor 2 Stunden
+ * echo Locale::fr()->count(0, .day); // 0 jour
+ * echo Date(2026, .march, 27)->format('EEEE, d. MMMM yyyy', $de); // Freitag, 27. März 2026
+ * ```
+ *
  * Plain data. The built-in ones are `Locale::en()`, `de()`, `fr()` and `it()`; build your own
  * with the field names. Arrays run January to December, Monday to Sunday, and for the unit
  * words year, month, week, day, hour, minute, second.
  *
- * `$units` holds two words per unit, singular then plural: `year`, `years`, `month`, ...
- * `$relative` holds four phrases per unit with `#` where the number goes: future singular,
- * future plural, past singular, past plural: `in # year`, `in # years`, `# year ago`, ...
+ * `$units` holds two words per unit, singular then plural: `year`, `years`, `month`,
+ * `months` and on. `$relative` holds four phrases per unit with `#` where the number goes:
+ * future singular, future plural, past singular, past plural, so `in # year`, `in # years`,
+ * `# year ago`, `# years ago` and on. A list of the wrong length stops the program when the
+ * locale is built.
  */
+#[atomic]
+#[docs::see: ["Relative", "Format", "Plural"]]
 public class Locale
 {
+    /**
+     * The language code, such as `de`.
+     */
     public const string $id;
+
+    /**
+     * Full month names, January to December. `MMMM`.
+     */
     public const array<string> $months;
+
+    /**
+     * Abbreviated month names inside a date, January to December. `MMM`.
+     */
     public const array<string> $monthsShort;
+
+    /**
+     * Abbreviated month names standing on their own, January to December. `LLL`.
+     */
     public const array<string> $monthsStandaloneShort;
+
+    /**
+     * One-letter month names, January to December. `MMMMM`.
+     */
     public const array<string> $monthsNarrow;
+
+    /**
+     * Full weekday names, Monday to Sunday. `EEEE`.
+     */
     public const array<string> $weekdays;
+
+    /**
+     * Abbreviated weekday names, Monday to Sunday. `E`.
+     */
     public const array<string> $weekdaysShort;
+
+    /**
+     * One-letter weekday names, Monday to Sunday. `EEEEE`.
+     */
     public const array<string> $weekdaysNarrow;
+
+    /**
+     * Quarter names, first to fourth. `QQQQ`.
+     */
     public const array<string> $quarters;
+
+    /**
+     * Abbreviated quarter names, first to fourth. `QQQ`.
+     */
     public const array<string> $quartersShort;
+
+    /**
+     * Abbreviated eras, before then after year 1. `G`.
+     */
     public const array<string> $eras;
+
+    /**
+     * Full era names, before then after year 1. `GGGG`.
+     */
     public const array<string> $erasWide;
+
+    /**
+     * The AM then the PM marker. `a`.
+     */
     public const array<string> $dayPeriods;
+
     /**
      * The week rule people of this language usually count by. Nothing applies it on its own;
      * pass it to a `Calendar` or a `Format` when you want it.
      */
     public const WeekRule $weekRule;
+
+    /**
+     * Which counts take the singular unit word.
+     */
     public const Plural $plural;
+
+    /**
+     * Two words per unit, singular then plural, for year, month, week, day, hour, minute and
+     * second.
+     */
     public const array<string> $units;
+
+    /**
+     * Four phrases per unit with `#` for the number: future singular, future plural, past
+     * singular, past plural.
+     */
     public const array<string> $relative;
+
+    /**
+     * The words for yesterday, today and tomorrow.
+     */
     public const array<string> $nearDays;
+
+    /**
+     * The word for now.
+     */
     public const string $now;
+
+    /**
+     * The word joining the last two parts of a list.
+     */
     public const string $and;
+
+    // the formatter indexes these by position, so a short list is refused up front
+    init
+    {
+        Locale::sized($this->months, 12, 'months');
+        Locale::sized($this->monthsShort, 12, 'monthsShort');
+        Locale::sized($this->monthsStandaloneShort, 12, 'monthsStandaloneShort');
+        Locale::sized($this->monthsNarrow, 12, 'monthsNarrow');
+        Locale::sized($this->weekdays, 7, 'weekdays');
+        Locale::sized($this->weekdaysShort, 7, 'weekdaysShort');
+        Locale::sized($this->weekdaysNarrow, 7, 'weekdaysNarrow');
+        Locale::sized($this->quarters, 4, 'quarters');
+        Locale::sized($this->quartersShort, 4, 'quartersShort');
+        Locale::sized($this->eras, 2, 'eras');
+        Locale::sized($this->erasWide, 2, 'erasWide');
+        Locale::sized($this->dayPeriods, 2, 'dayPeriods');
+        Locale::sized($this->units, 14, 'units');
+        Locale::sized($this->relative, 28, 'relative');
+        Locale::sized($this->nearDays, 3, 'nearDays');
+    }
 
     internal static Locale $english = englishLocale('en', WeekRule(.sunday, 1));
     internal static Locale $englishIso = englishLocale('en', WeekRule::iso());
@@ -178,37 +289,47 @@ public class Locale
     }
 
     /**
-     * `$count` and the unit word: `1 day`, `3 Tage`.
+     * `$count` and the unit word: `1 day`, `3 Tage`. Quarters are said as months, `2` quarters
+     * as `6 months`, and units below a second as whole seconds.
      */
     public const function count(int64 $count, Unit $unit) : string
     {
+        int64 $n = $unit->said($count);
         usize $i = Locale::slot($unit) * 2;
 
-        if (!$this->plural->singular($count)) {
+        if (!$this->plural->singular($n)) {
             $i = $i + 1;
         }
 
         string $word = $this->units[$i];
-        return "{$count} {$word}";
+        return "{$n} {$word}";
     }
 
     /**
      * The phrase for `$count` units from now, negative for the past: `in 3 days`,
-     * `vor 2 Stunden`.
+     * `vor 2 Stunden`. Units are said as in `count`.
      */
     public const function relative(int64 $count, Unit $unit) : string
     {
+        int64 $n = $unit->said($count);
         usize $i = Locale::slot($unit) * 4;
 
-        if ($count < 0) {
+        if ($n < 0) {
             $i = $i + 2;
         }
 
-        if (!$this->plural->singular($count)) {
+        if (!$this->plural->singular($n)) {
             $i = $i + 1;
         }
 
-        return str::replace_first($this->relative[$i], '#', str::from(math::abs($count)));
+        return str::replace_first($this->relative[$i], '#', str::from(math::abs($n)));
+    }
+
+    private static function sized(const array<string>& $list, usize $want, const string& $name) : void
+    {
+        if ($list->count() != $want) {
+            die("calendar: a Locale needs {$want} {$name}, not {$list->count()}");
+        }
     }
 
     // year, month, week, day, hour, minute, second; quarters count as three months

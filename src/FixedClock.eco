@@ -4,16 +4,29 @@ use std::time;
 
 /**
  * A clock stopped at one instant.
+ *
+ * Every call to `now` returns `$at`, so a test that reads the time twice gets the same answer
+ * twice. Use a `ManualClock` when the test needs time to pass.
  */
+#[atomic]
 public class FixedClock : Clock
 {
+    /**
+     * The instant this clock always reports.
+     */
     public const time::timestamp $at;
 
+    /**
+     * A clock that reads `$at` forever.
+     */
     constructor(time::timestamp $at)
     {
         $this->at = $at;
     }
 
+    /**
+     * Always `$at`.
+     */
     public const function now() : time::timestamp
     {
         return $this->at;

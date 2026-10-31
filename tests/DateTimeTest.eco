@@ -1,4 +1,4 @@
-use calendar::{Date, Time, DateTime, Month, Period, Unit, Rounding};
+use calendar::{Date, Time, DateTime, Month, Period, Unit, Rounding, WeekRule};
 use std::time;
 
 test datetime_basics
@@ -62,4 +62,98 @@ test datetime_with
     assert($dt->with($month: .february) == DateTime(2026, .february, 28, 9, 30));
     assert($dt->with($hour: 17) == DateTime(2026, .january, 31, 17, 30));
     assert($dt->with($day: 1, $minute: 0) == DateTime(2026, .january, 1, 9, 0));
+}
+
+test datetime_checks_and_compares
+{
+    DateTime $ok = guard DateTime::of(2024, 2, 29, 23, 59, 59, 999999999);
+    assert(str::from($ok) == '2024-02-29T23:59:59.999999999');
+    assert(str::from(DateTime::of(2026, 1, 1, 24)->failure()) == 'hour 24 is out of range');
+    assert(str::from(DateTime::of(2026, 0, 1)->failure()) == 'month 0 is out of range');
+
+    $a = DateTime(2026, .october, 28, 9);
+    $b = DateTime(2026, .october, 28, 9, 0, 0, 1);
+    assert($a < $b && $b > $a && $a <= $a && $a != $b);
+    assert(DateTime(2026, .october, 27, 23) < $a);
+    assert($a->date->midnight() == DateTime(2026, .october, 28));
+}
+
+test datetime_add_refuses_or_clamps
+{
+    $jan31 = DateTime(2026, .january, 31, 12);
+    assert($jan31->add(Period::months(1), .reject)->failed());
+    DateTime $clamped = guard $jan31->add(Period::months(1), .clamp);
+    assert($clamped == DateTime(2026, .february, 28, 12));
+    assert($jan31->sub(Period::months(2), .reject)->failed());
+    DateTime $back = guard $jan31->sub(Period::months(3), .reject);
+    assert($back == DateTime(2025, .october, 31, 12));
+    assert(DateTime(9999, .december, 31, 23)->add(Period::hours(1), .clamp)->failed());
+    assert(DateTime(-9999, .january, 1)->sub(Period::nanoseconds(1), .clamp)->failed());
+    assert($jan31 - time::duration::hours(12) == DateTime(2026, .january, 31));
+    assert($jan31 + Period($days: -1, $hours: 13) == DateTime(2026, .january, 31, 1));
+}
+
+test datetime_until_both_ways
+{
+    // the clock part borrows a day when it runs backwards
+    $a = DateTime(2026, .march, 1, 22);
+    $b = DateTime(2026, .march, 3, 6);
+    assert($a->until($b) == Period($days: 1, $hours: 8));
+    assert($b->until($a) == Period($days: -1, $hours: -8));
+    assert($b->since($a) == Period($days: 1, $hours: 8));
+    assert($b->since($a, .hour) == 32);
+    assert($a->until($a) == Period::zero());
+    assert($a->until(DateTime(2026, .march, 1, 22, 0, 0, 1)) == Period::nanoseconds(1));
+
+    // weeks are seven 24-hour days on a wall clock
+    assert($a->until(DateTime(2026, .march, 15, 21), .week) == 1);
+    assert($a->until(DateTime(2026, .march, 15, 22), .week) == 2);
+    assert($a->until(DateTime(2026, .march, 15, 21), .week, .halfExpand) == 2);
+    assert($a->until(DateTime(2027, .march, 1, 21), .year) == 0);
+    assert($a->until(DateTime(2027, .march, 1, 22), .year) == 1);
+    assert($a->until(DateTime(2026, .june, 1, 22), .quarter) == 1);
+    assert($a->until(DateTime(2026, .june, 1, 21), .quarter, .ceil) == 1);
+    assert($a->until(DateTime(2026, .june, 1, 21), .quarter) == 0);
+}
+
+test datetime_counts_at_the_edge_of_the_range
+{
+    // the next whole unit lies past the year 9999; counting must not need to reach it
+    $first = DateTime(-9999, .september, 15);
+    $last = DateTime(9999, .december, 31, 12);
+    assert($first->until($last, .year) == 19998);
+    assert($first->until($last, .year, .halfExpand) == 19998);
+    assert($first->until($last, .year, .ceil) == 19999);
+    assert($last->until($first, .month, .ceil) == -239979);
+    assert($last->until($first, .month, .floor) == -239980);
+    assert($last->until(DateTime(-9999, .january, 1), .quarter, .halfEven) == -79996);
+    assert(DateTime::parse('9999-12-31T23:59:59.999999999')->has_value());
+}
+
+test datetime_start_and_round_more
+{
+    $dt = DateTime(2026, .october, 28, 14, 35, 12, 500000000);
+    assert($dt->start(.year) == DateTime(2026, .january, 1));
+    assert($dt->start(.quarter) == DateTime(2026, .october, 1));
+    assert($dt->start(.week) == DateTime(2026, .october, 26));
+    assert($dt->start(.week, WeekRule(.sunday, 1)) == DateTime(2026, .october, 25));
+    assert($dt->start(.minute) == DateTime(2026, .october, 28, 14, 35));
+    assert($dt->start(.second) == DateTime(2026, .october, 28, 14, 35, 12));
+    assert($dt->round(.second) == DateTime(2026, .october, 28, 14, 35, 13));
+    assert($dt->round(.second, .halfEven) == DateTime(2026, .october, 28, 14, 35, 12));
+    assert($dt->round(.day, .floor) == DateTime(2026, .october, 28));
+    assert($dt->round(.day, .ceil) == DateTime(2026, .october, 29));
+    assert(DateTime(2026, .october, 28, 11, 59)->round(.day) == DateTime(2026, .october, 28));
+    assert($dt->round(.millisecond) == $dt);
+}
+
+test datetime_parse_edges
+{
+    DateTime $lower = guard DateTime::parse('2026-10-28t14:05');
+    assert($lower == DateTime(2026, .october, 28, 14, 5));
+    DateTime $old = guard DateTime::parse('-0044-03-15T12:00:00');
+    assert($old->date->year == -44);
+    assert(str::from(DateTime::parse('2026-10-28T')->failure()) == 'expected a two-digit hour at byte 11');
+    assert(str::from(DateTime::parse('2026-10-28T14:05+01:00')->failure()) == 'unexpected text at byte 16');
+    assert(str::from(DateTime::parse('2026-02-29T00:00')->failure()) == 'day 29 at byte 8 is out of range');
 }

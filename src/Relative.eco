@@ -6,6 +6,14 @@ use std::time;
 /**
  * How to say how far away a moment is: "3 days ago", "in 2 hours", "yesterday".
  *
+ * ```echo
+ * $now = DateTime(2026, .march, 27, 9, 30)->at(Zone(named: 'Europe/Zurich'));
+ * echo Relative()->render($now + Period::days(1), $now); // tomorrow
+ * echo Relative()->render($now - Period::hours(1), $now); // 1 hour ago
+ * echo Relative()->render($now + Period::days(3), $now, Locale::de()); // in 3 Tagen
+ * echo Relative($numeric: true)->render($now + Period::days(1), $now); // in 1 day
+ * ```
+ *
  * The distance is a calendar distance, not seconds divided by a guessed month length: from
  * January 31 to March 1 is "1 month", from 09:00 to 09:00 three days later across a DST
  * change is "3 days". The largest unit with a count of at least one wins and the rest is
@@ -19,22 +27,28 @@ public struct Relative
     public const Unit? $unit = null;
 
     /**
-     * True for "in 1 day" and "0 seconds ago" instead of "tomorrow" and "now".
+     * True for "in 1 day" and "in 0 seconds" instead of "tomorrow" and "now".
      */
     public const bool $numeric = false;
 
     /**
-     * Below this many seconds the answer is the locale's word for now, unless `$numeric`.
+     * Below this many seconds either way the answer is the locale's word for now, unless
+     * `$numeric` or `$unit` is set.
      */
     public const int64 $nowWithin = 45;
 
     /**
-     * How the count of the chosen unit is rounded.
+     * How the count of the chosen unit is rounded. The default cuts toward zero, so 1 day and
+     * 23 hours is "1 day".
      */
     public const Rounding $rounding = .trunc;
 
     /**
      * `$then` described from `$now`, read in `$now`'s zone.
+     *
+     * "Tomorrow" and "yesterday" need the count and the calendar to agree: from Friday 09:30,
+     * Saturday 20:00 is "tomorrow", while Sunday 08:30 is 1 day and 23 hours away and says
+     * "in 1 day".
      */
     public const function render(const Zoned& $then, const Zoned& $now, Locale $locale = Locale::en()) : string
     {
@@ -61,7 +75,7 @@ public struct Relative
 
     /**
      * `$then` described from `$today` in whole days, weeks, months or years: "tomorrow",
-     * "in 3 weeks", "2 years ago".
+     * "in 3 weeks", "2 years ago". A clock unit in `$unit` is said as days.
      */
     public const function render(const Date& $then, const Date& $today, Locale $locale = Locale::en()) : string
     {

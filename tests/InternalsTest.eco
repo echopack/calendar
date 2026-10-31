@@ -1,0 +1,109 @@
+use calendar::{Writer, Scanner, Date, Format, Locale};
+
+test integer_helpers
+{
+    assert(calendar::floorDiv(7, 2) == 3);
+    assert(calendar::floorDiv(-7, 2) == -4);
+    assert(calendar::floorDiv(7, -2) == -4);
+    assert(calendar::floorDiv(-8, 2) == -4);
+    assert(calendar::floorMod(-1, 7) == 6);
+    assert(calendar::floorMod(13, 7) == 6);
+    assert(calendar::floorMod(-14, 7) == 0);
+    assert(calendar::sign64(-5) == -1);
+    assert(calendar::sign64(0) == 0);
+    assert(calendar::pad(-44, 4) == '-0044');
+    assert(calendar::pad(12345, 4) == '12345');
+    assert(calendar::fraction(500000000) == '500');
+    assert(calendar::fraction(1500) == '000001500');
+    assert(calendar::fraction(1000) == '000001');
+    assert(calendar::fraction(0) == '');
+}
+
+test writer_numbers_and_spills
+{
+    Writer $w = Writer();
+    $w->number(7, 1);
+    $w->number(7, 2);
+    $w->number(2026, 4);
+    $w->number(-44, 4);
+    $w->number(5, 6);
+    $w->number(-9223372036854775807 - 1, 1);
+    assert($w->finish() == '7072026-0044000005-9223372036854775808');
+
+    // text that lands exactly on, and just past, the end of the buffer
+    Writer $exact = Writer();
+    string $expected = '';
+
+    for (int32 $i = 0; $i < 127; $i++) {
+        $exact->push(97);
+        $expected->push(97);
+    }
+
+    $exact->text('b');
+    $expected->append('b');
+    $exact->text('cd');
+    $expected->append('cd');
+    $exact->number(12, 2);
+    $expected->append('12');
+    assert($exact->finish() == $expected);
+
+    // one piece longer than the whole buffer
+    Writer $long = Writer();
+    string $big = str::repeat('x', 300);
+    $long->text('a');
+    $long->text($big);
+    $long->text('z');
+    assert($long->finish() == str::concat(str::concat('a', $big), 'z'));
+}
+
+test scanner_reads_strictly
+{
+    Scanner $s = Scanner('12abc');
+    assert($s->digits(3, 4) == null);
+    assert($s->at == 0);
+    int64 $twelve = guard $s->digits(1, 4);
+    assert($twelve == 12);
+    assert($s->peek() == 97);
+    assert(!$s->eat(98));
+    assert($s->word('ABC'));
+    assert($s->done());
+    assert($s->peek() == 0);
+    assert(!$s->eat(0));
+
+    // the longest name wins, and two names that tie are not read as either
+    array<string> $names = ['Ma', 'Mar', 'March', 'mar'];
+    Scanner $m = Scanner('MARCH 1');
+    int64 $march = guard $m->name($names);
+    assert($march == 2);
+    Scanner $tie = Scanner('Mar 1');
+    assert($tie->name($names) == null);
+    assert($tie->at == 0);
+
+    Scanner $f = Scanner('123x');
+    int64 $nanos = guard $f->fraction();
+    assert($nanos == 123000000);
+    Scanner $empty = Scanner('');
+    assert($empty->fraction() == null);
+    assert(!$empty->sees(''));
+}
+
+test numeric_shortcut_agrees_with_the_general_reader
+{
+    // the same text through a digits-only pattern and one that is not
+    array<string> $texts = ['28.10.2026', '1.1.2026', '29.02.2024', '29.02.2023', '31.04.2026', '00.10.2026', '28.10.26', '28.10.20266', '28.10.', '.10.2026'];
+    $quick = Format('d.M.yyyy');
+    $slow = Format("d.M.yyyy'.'");
+
+    foreach ($texts as const &$text) {
+        string $dotted = str::concat($text, '.');
+        result<Date, calendar::ParseError> $a = Date::parse($text, $quick);
+        result<Date, calendar::ParseError> $b = Date::parse($dotted, $slow);
+        assert($a->failed() == $b->failed());
+
+        if ($a->has_value()) {
+            Date $da = guard $a;
+            Date $db = guard $b;
+            assert($da == $db);
+        }
+    }
+}

@@ -134,3 +134,202 @@ test values_key_maps
     assert($holidays[Date(2026, .august, 1)] == 'Bundesfeier');
     assert(!$holidays->has(Date(2026, .august, 2)));
 }
+
+test parse_real_mail_dates
+{
+    Zoned $want = guard Zoned::parse('2026-10-01T09:30:00+01:00');
+    array<string> $forms = [
+        'Thu, 1 Oct 2026 09:30:00 +0100',
+        'Thu, 01 Oct 2026 09:30:00 +0100',
+        '1 Oct 2026 09:30:00 +0100',
+        'thu,  1 oct 2026 09:30 +0100',
+        'Thu, 1 Oct 26 09:30:00 +0100',
+        'Thu, 1 Oct 2026 08:30:00 GMT',
+        'Thu, 1 Oct 2026 04:30:00 EDT',
+        'Thu, 1 Oct 2026 08:30:00 +0000 (UTC)',
+    ];
+
+    foreach ($forms as const &$text) {
+        Zoned $z = guard Zoned::parse($text, Format::rfc2822());
+        assert($z->instant == $want->instant);
+    }
+
+    Zoned $old = guard Zoned::parse('1 Jan 99 00:00 GMT', Format::rfc2822());
+    assert($old->date == Date(1999, .january, 1));
+    assert(Zoned::parse('Fri, 1 Oct 2026 09:30:00 +0100', Format::rfc2822())->failed());
+    assert(Zoned::parse('Thu, 1 Oct 2026 09:30:00', Format::rfc2822())->failed());
+}
+
+test parse_rfc3339_fractions
+{
+    Zoned $z = guard Zoned::parse('2026-10-28T08:30:00.25Z', Format::rfc3339());
+    assert($z->time == Time(8, 30, 0, 250000000));
+    Zoned $y0 = guard Zoned::parse('0000-03-01T00:00:00Z', Format::rfc3339());
+    assert($y0->date == Date(0, .march, 1));
+}
+
+test parse_refuses_ambiguous_names
+{
+    // J could be January, June or July
+    assert(Date::parse('J 5 2026', Format('MMMMM d yyyy'))->failed());
+    assert(Date::parse('W 28.10.2026', Format('EEEEE dd.MM.yyyy'))->failed());
+}
+
+test parse_week_date_edges_fail
+{
+    // ISO 9999-W52-7 is 10000-01-02
+    assert(Date::parse('9999-52-7', Format('YYYY-ww-e'))->failed());
+    Date $d = guard Date::parse('9999-52-5', Format('YYYY-ww-e'));
+    assert($d == Date(9999, .december, 31));
+}
+
+test parse_numeric_patterns_report_like_any_other
+{
+    // plain digit patterns take a shortcut; whatever it cannot read gets the usual reason
+    $f = Format('dd.MM.yyyy');
+    assert(str::from(Date::parse('31.02.2024', $f)->failure()) == '2024-02 has no day 31');
+    assert(str::from(Date::parse('29.02.2023', $f)->failure()) == '2023-02 has no day 29');
+    assert(str::from(Date::parse('1.1.2024', $f)->failure()) == 'expected a number at byte 0');
+    assert(str::from(Date::parse('01.01.2024x', $f)->failure()) == 'unexpected text at byte 10');
+    assert(str::from(Date::parse('01.13.2024', $f)->failure()) == 'month 13 at byte 3 is out of range');
+    Date $leap = guard Date::parse('29.02.2024', $f);
+    assert($leap == Date(2024, .february, 29));
+    Date $short = guard Date::parse('3/7/26', Format('d/M/yy'));
+    assert($short == Date(2026, .july, 3));
+}
+
+test parse_hours_eras_and_quarters
+{
+    Time $a = guard Time::parse('24:00', Format('kk:mm'));
+    assert($a == Time(0));
+    Time $b = guard Time::parse('11 PM', Format('K a'));
+    assert($b == Time(23));
+    Time $c = guard Time::parse('0 AM', Format('K a'));
+    assert($c == Time(0));
+    Time $d = guard Time::parse('12:00:60', Format('HH:mm:ss'));
+    assert($d == Time(12, 0, 59));
+    assert(str::from(Time::parse('0:00', Format('k:mm'))->failure()) == 'hour 0 at byte 0 is out of range');
+    assert(str::from(Time::parse('13 PM', Format('h a'))->failure()) == 'hour 13 at byte 0 is out of range');
+    assert(str::from(Time::parse('12 AM', Format('K a'))->failure()) == 'hour 12 at byte 0 is out of range');
+    assert(str::from(Time::parse('12:00:61', Format('HH:mm:ss'))->failure()) == 'second 61 at byte 6 is out of range');
+
+    Date $bc = guard Date::parse('1 1 1 Before Christ', Format('d M y GGGG'));
+    assert($bc->year == 0);
+    Date $ad = guard Date::parse('15.03.44 n. Chr.', Format('dd.MM.y G')->locale(Locale::de()));
+    assert($ad == Date(44, .march, 15));
+    assert(Date::parse('15.03.44 AD', Format('dd.MM.y G')->locale(Locale::de()))->failed());
+
+    Date $q = guard Date::parse('4 28.10.2026', Format('QQQQQ dd.MM.yyyy'));
+    assert($q == Date(2026, .october, 28));
+    Date $qn = guard Date::parse('4th quarter 28.10.2026', Format('QQQQ dd.MM.yyyy'));
+    assert($qn == $q);
+    assert(str::from(Date::parse('Q3 28.10.2026', Format('QQQ dd.MM.yyyy'))->failure()) == 'quarter does not match the rest of the text');
+    assert(str::from(Date::parse('5 28.10.2026', Format('Q dd.MM.yyyy'))->failure()) == 'quarter 5 at byte 0 is out of range');
+}
+
+test parse_reports_what_is_missing_or_wrong
+{
+    assert(str::from(Date::parse('2026', Format('yyyy'))->failure()) == 'the text has no month');
+    assert(str::from(Date::parse('2026-W10', Format("YYYY-'W'ww"))->failure()) == 'the text has no weekday');
+    assert(str::from(Date::parse('2025-W53-1', Format("YYYY-'W'ww-e"))->failure()) == 'week does not match the rest of the text');
+    assert(str::from(Date::parse('2025-366', Format('yyyy-DDD'))->failure()) == 'day of year 366 is out of range');
+    Date $leap = guard Date::parse('2024-366', Format('yyyy-DDD'));
+    assert($leap == Date(2024, .december, 31));
+    assert(str::from(Date::parse('2026-000', Format('yyyy-DDD'))->failure()) == 'day of year 0 at byte 5 is out of range');
+    assert(str::from(Date::parse('2026-10-28', Format('yyyy-MM-dd HH:mm'))->failure()) == "expected ' ' at byte 10");
+    assert(str::from(DateTime::parse('2026-10-28', Format('yyyy-MM-dd'))->failure()) == 'the text has no hour');
+    assert(str::from(Zoned::parse('2026-10-28 09:30 Nowhere/Atlantis', Format('yyyy-MM-dd HH:mm VV'))->failure()) == "no time zone named 'Nowhere/Atlantis' at byte 17");
+    assert(str::from(Zoned::parse('2026-10-28 09:30 ', Format('yyyy-MM-dd HH:mm VV'))->failure()) == 'expected a zone name at byte 17');
+    assert(str::from(Zoned::parse('2026-10-28 09:30 CET+1', Format('yyyy-MM-dd HH:mm OOOO'))->failure()) == "expected 'GMT' at byte 17");
+    assert(str::from(Date::parse('28.10.-044', Format('dd.MM.uuuu'))->failure()) == 'expected a year at byte 7');
+    Date $signed = guard Date::parse('28.10.-0044', Format('dd.MM.uuuu'));
+    assert($signed->year == -44);
+}
+
+test parse_zone_letters
+{
+    $zurich = Zone(named: 'Europe/Zurich');
+    Zoned $gmt = guard Zoned::parse('2026-10-28 08:30 GMT', Format('yyyy-MM-dd HH:mm O'));
+    assert($gmt->offset == Offset(0));
+    Zoned $utc = guard Zoned::parse('2026-10-28 09:30 UTC+01:00', Format('yyyy-MM-dd HH:mm O'));
+    assert($utc->instant == $gmt->instant);
+    Zoned $wide = guard Zoned::parse('2026-10-28 09:30 GMT+01:00', Format('yyyy-MM-dd HH:mm ZZZZ'));
+    assert($wide->instant == $gmt->instant);
+    Zoned $z = guard Zoned::parse('2026-10-28 08:30 Z', Format('yyyy-MM-dd HH:mm XXX'));
+    assert($z->instant == $gmt->instant);
+
+    // a zone without an offset resolves a skipped time forward
+    Zoned $gap = guard Zoned::parse('2026-03-29 02:30 Europe/Zurich', Format('yyyy-MM-dd HH:mm VV'));
+    assert(str::from($gap) == '2026-03-29T03:30:00+02:00[Europe/Zurich]');
+
+    // an offset picks the side of a repeated hour, and a zone name keeps it
+    Zoned $second = guard Zoned::parse('2026-10-25 02:30 +01:00 Europe/Zurich', Format('yyyy-MM-dd HH:mm XXX VV'));
+    assert(str::from($second) == '2026-10-25T02:30:00+01:00[Europe/Zurich]');
+    assert($second->zone->id == $zurich->id);
+
+    // the zone name stops at a full stop, so it can end a sentence
+    Zoned $dot = guard Zoned::parse('09:30 on 2026-10-28 in Europe/Zurich.', Format("HH:mm 'on' yyyy-MM-dd 'in' VV'.'"));
+    assert($dot->instant == $gmt->instant);
+}
+
+test parse_mail_dates_strictly_enough
+{
+    Zoned $nested = guard Zoned::parse('Thu, 1 Oct 2026 08:30:00 +0000 (a (nested) comment)', Format::rfc2822());
+    assert($nested->date == Date(2026, .october, 1));
+    Zoned $leap = guard Zoned::parse('Thu, 31 Dec 2026 23:59:60 +0000', Format::rfc2822());
+    assert($leap->time == Time(23, 59, 59));
+    Zoned $short = guard Zoned::parse('1 Oct 126 08:30 GMT', Format::rfc2822());
+    assert($short->date->year == 2026);
+    Zoned $ut = guard Zoned::parse('1 Oct 2026 08:30 UT', Format::rfc2822());
+    assert($ut->offset == Offset(0));
+    Zoned $pdt = guard Zoned::parse('1 Oct 2026 01:30 PDT', Format::rfc2822());
+    assert($pdt->instant == $ut->instant);
+    Zoned $minus = guard Zoned::parse('1 Oct 2026 08:30 -0000', Format::rfc2822());
+    assert($minus->instant == $ut->instant);
+
+    assert(str::from(Zoned::parse('Thu 1 Oct 2026 08:30 GMT', Format::rfc2822())->failure()) == "expected ',' at byte 4");
+    assert(str::from(Zoned::parse('32 Oct 2026 08:30 GMT', Format::rfc2822())->failure()) == 'day 32 at byte 0 is out of range');
+    assert(str::from(Zoned::parse('31 Sep 2026 08:30 GMT', Format::rfc2822())->failure()) == '2026-09 has no day 31');
+    assert(str::from(Zoned::parse('1 Okt 2026 08:30 GMT', Format::rfc2822())->failure()) == 'expected a month name at byte 2');
+    assert(str::from(Zoned::parse('1 Oct 2026 8:30 GMT', Format::rfc2822())->failure()) == 'expected a two-digit hour at byte 11');
+    assert(str::from(Zoned::parse('1 Oct 2026 24:00 GMT', Format::rfc2822())->failure()) == 'hour 24 at byte 11 is out of range');
+    assert(str::from(Zoned::parse('1 Oct 2026 08:30 XYZ', Format::rfc2822())->failure()) == 'expected a zone like +0100 or GMT at byte 17');
+    assert(str::from(Zoned::parse('1 Oct 2026 08:30 +01', Format::rfc2822())->failure()) == 'expected a zone like +0100 at byte 17');
+    assert(Zoned::parse('1 Oct 2026 08:30 GMT trailing', Format::rfc2822())->failed());
+    assert(Zoned::parse('1 Oct 2026 08:30GMT', Format::rfc2822())->failed());
+}
+
+test parse_rfc3339_strictly
+{
+    Zoned $space = guard Zoned::parse('2026-10-28 08:30:00z', Format::rfc3339());
+    assert($space->offset == Offset(0));
+    Zoned $nanos = guard Zoned::parse('2026-10-28T08:30:00.123456789-05:30', Format::rfc3339());
+    assert($nanos->time->nanosecond == 123456789);
+    assert($nanos->offset == Offset(hours: -5, 30));
+    assert(str::from(Zoned::parse('2026-10-28T08:30:00', Format::rfc3339())->failure()) == "expected 'Z', '+' or '-' at byte 19");
+    assert(Zoned::parse('2026-10-28T08:30:00+01:00[Europe/Zurich]', Format::rfc3339())->failed());
+    assert(Zoned::parse('2026-10-28T08:30:00.Z', Format::rfc3339())->failed());
+}
+
+test calendar_parses_in_its_own_zone_and_language
+{
+    $zurich = Zone(named: 'Europe/Zurich');
+    $cal = Calendar($zone: $zurich, $locale: Locale::it(), $clock: FixedClock(time::timestamp::from_unix_secs(0)));
+    Zoned $a = guard $cal->parse('mercoledì 28 ottobre 2026 09:30', 'EEEE d MMMM yyyy HH:mm');
+    assert(str::from($a) == '2026-10-28T09:30:00+01:00[Europe/Zurich]');
+
+    // an offset in the text wins over the calendar's zone
+    Zoned $b = guard $cal->parse('28.10.2026 09:30 +02:00', 'dd.MM.yyyy HH:mm XXX');
+    assert($b->zone->id == '+02:00');
+
+    // a compiled format keeps its own language
+    Zoned $c = guard $cal->parse('Wednesday 28 October 2026 09:30', Format('EEEE d MMMM yyyy HH:mm'));
+    assert($c == $a);
+    assert($cal->parse('mercoledì 28 ottobre 2026 09:30', Format('EEEE d MMMM yyyy HH:mm'))->failed());
+
+    // an HTTP date is in GMT whatever the calendar's zone
+    Zoned $d = guard $cal->parse('Wed, 28 Oct 2026 08:30:00 GMT', Format::http());
+    assert($d->instant == $a->instant);
+    Zoned $e = guard $cal->parse('Wed, 28 Oct 2026 09:30:00 +0100', Format::rfc2822());
+    assert($e->instant == $a->instant);
+}

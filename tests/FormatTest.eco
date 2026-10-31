@@ -123,3 +123,143 @@ test calendar_fills_in_pattern_strings_only
     assert($us->format($d, Format("Y-'W'w MMMM")) == '2026-W53 January');
     assert(Calendar($zone: Zone::utc())->week($d) == Week(2026, 53));
 }
+
+test rfc3339_keeps_fractions_and_years
+{
+    $z = Zoned(time::timestamp::from_unix_secs(1793176200) + time::duration::millis(250), Zone::utc());
+    assert($z->format(Format::rfc3339()) == '2026-10-28T08:30:00.250Z');
+    $y0 = DateTime(0, .march, 1)->at(Zone::utc());
+    assert($y0->format(Format::rfc3339()) == '0000-03-01T00:00:00Z');
+    $east = DateTime(2026, .october, 28, 9, 30)->at(Zone(offset: Offset(hours: 5, 30)));
+    assert($east->format(Format::rfc3339()) == '2026-10-28T09:30:00+05:30');
+}
+
+test format_output_longer_than_its_buffer
+{
+    // past 128 bytes the output spills into a string; the text is the same
+    $one = Format('EEEE, d. MMMM yyyy | ')->locale(Locale::de());
+    $many = Format('EEEE, d. MMMM yyyy | EEEE, d. MMMM yyyy | EEEE, d. MMMM yyyy | EEEE, d. MMMM yyyy | EEEE, d. MMMM yyyy | EEEE, d. MMMM yyyy | EEEE, d. MMMM yyyy | ')->locale(Locale::de());
+    $day = Date(2026, .september, 30);
+    string $expected = '';
+
+    for (int32 $i = 0; $i < 7; $i++) {
+        $expected->append($one->render($day));
+    }
+
+    string $written = $many->render($day);
+    assert($written->size() > 128);
+    assert($written == $expected);
+}
+
+test format_quarters_eras_and_hours
+{
+    $d = Date(2026, .october, 28);
+    assert($d->format('QQ QQQQQ qqqq') == '04 4 4th quarter');
+    assert($d->format('Q', Locale::de()) == '4');
+    assert($d->format('GGGG', Locale::fr()) == 'après Jésus-Christ');
+    assert(Date(-44, .march, 15)->format('y GGGG') == '45 Before Christ');
+    assert(Date(0, .january, 1)->format('y G u') == '1 BC 0');
+    assert(Date(1, .january, 1)->format('y G') == '1 AD');
+    assert(Date(5, .january, 1)->format('yyyyy yyy yy y') == '00005 005 05 5');
+    assert(Date(2026, .january, 1)->format('LLLLL MMMMM') == 'J J');
+
+    // every hour letter around midnight and noon
+    assert(Time(0)->format('H k K h a') == '0 24 0 12 AM');
+    assert(Time(11)->format('H k K h a') == '11 11 11 11 AM');
+    assert(Time(12)->format('H k K h a') == '12 12 0 12 PM');
+    assert(Time(23)->format('HH kk KK hh a') == '23 23 11 11 PM');
+}
+
+test format_offsets_with_seconds
+{
+    // an offset with seconds, as old local mean times had
+    $odd = Zoned(time::timestamp::from_unix_secs(1793176200), Zone(offset: Offset(3600 + 1800 + 15)));
+    assert($odd->format('X XX XXX XXXX XXXXX') == '+013015 +0130 +01:30 +013015 +01:30:15');
+    assert($odd->format('x xxxx xxxxx') == '+013015 +013015 +01:30:15');
+    assert($odd->format('Z ZZZZZ O') == '+0130 +01:30 GMT+1:30');
+
+    array<string> $patterns = ['yyyy-MM-dd HH:mm:ss X', 'yyyy-MM-dd HH:mm:ss XXXX', 'yyyy-MM-dd HH:mm:ss x', 'yyyy-MM-dd HH:mm:ss xxxx', 'yyyy-MM-dd HH:mm:ss XXXXX', 'yyyy-MM-dd HH:mm:ss xxxxx'];
+    array<int32> $offsets = [3600 + 1800 + 15, -(7200 + 59), 93599, -93599, 0, 19800];
+
+    foreach ($patterns as const &$p) {
+        $f = Format($p);
+
+        foreach ($offsets as const &$o) {
+            $z = Zoned(time::timestamp::from_unix_secs(1793176200), Zone(offset: Offset($o)));
+            Zoned $back = guard Zoned::parse($f->render($z), $f);
+            assert($back->instant == $z->instant);
+            assert($back->offset == $z->offset);
+        }
+    }
+
+    Offset $basic = guard Offset::parse('-020059');
+    assert($basic == Offset(-(7200 + 59)));
+}
+
+test format_pattern_errors
+{
+    assert(str::from(Format::of('VVV')->failure()) == "too many 'V' in a row at byte 0");
+    assert(str::from(Format::of('V')->failure()) == "too many 'V' in a row at byte 0");
+    assert(str::from(Format::of('OO')->failure()) == "too many 'O' in a row at byte 0");
+    assert(Format::of('ZZZZZZ')->failed());
+    assert(Format::of('SSSSSSSSSS')->failed());
+    assert(Format::of('MMMMMM')->failed());
+    assert(Format::of('DDDD')->failed());
+    assert(str::from(Format::of('')->failure()) == 'the pattern is empty');
+    assert(str::from(Format::of("yyyy 'x")->failure()) == 'a quote is never closed, from byte 5');
+    assert(str::from(Format::of('yyyy-MM-dd J')->failure()) == "'J' is not a pattern letter; quote literal text like 'this', at byte 11");
+    assert(str::from(Format::of('KK:mm')->failure()) == "'h' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte 0");
+
+    // literal text: quotes, doubled quotes, and anything that is not a letter
+    Format $f = guard Format::of("'Tag' d. 'im' MMMM, 'o''clock' HH");
+    assert($f->pattern == "'Tag' d. 'im' MMMM, 'o''clock' HH");
+    assert($f->render(DateTime(2026, .march, 4, 9)) == "Tag 4. im March, o'clock 09");
+    assert(Date(2026, .march, 4)->format('dd/MM/yyyy — EEE') == '04/03/2026 — Wed');
+}
+
+test format_keeps_its_settings
+{
+    $base = Format("YYYY-'W'ww-e EEEE yy");
+    $de = $base->locale(Locale::de());
+    $sunday = $de->weeks(WeekRule(.sunday, 1));
+    $old = $sunday->pivot(1900);
+    $d = Date(2027, .january, 1);
+
+    // every copy keeps what it was given and leaves the original alone
+    assert($base->render($d) == '2026-W53-5 Friday 27');
+    assert($de->render($d) == '2026-W53-5 Freitag 27');
+    assert($sunday->render($d) == '2027-W01-6 Freitag 27');
+    assert($old->render($d) == '2027-W01-6 Freitag 27');
+    Date $read = guard Date::parse('2027-W01-6 Freitag 27', $old);
+    assert($read == $d);
+    assert($base->pattern == $old->pattern);
+}
+
+test format_presets_in_other_zones
+{
+    $ny = DateTime(2026, .october, 28, 4, 30, 0, 123000000)->at(Zone(named: 'America/New_York'));
+    assert($ny->format(Format::rfc3339()) == '2026-10-28T04:30:00.123-04:00');
+    assert($ny->format(Format::rfc2822()) == 'Wed, 28 Oct 2026 04:30:00 -0400');
+    assert($ny->format(Format::http()) == 'Wed, 28 Oct 2026 08:30:00 GMT');
+    $old = DateTime(-44, .march, 15, 12)->at(Zone::utc());
+    assert($old->format(Format::rfc3339()) == '-0044-03-15T12:00:00Z');
+
+    // the presets stay English whatever locale they are given, so they still read back
+    assert($ny->format(Format::rfc2822()->locale(Locale::de())) == 'Wed, 28 Oct 2026 04:30:00 -0400');
+    assert($ny->format(Format::http()->locale(Locale::fr())) == 'Wed, 28 Oct 2026 08:30:00 GMT');
+    Zoned $back = guard Zoned::parse($ny->format(Format::http()), Format::http()->locale(Locale::it()));
+    assert($back->instant->unix_secs() == $ny->instant->unix_secs());
+}
+
+test calendar_formats_every_value
+{
+    $cal = Calendar($zone: Zone(named: 'Europe/Zurich'), $locale: Locale::fr(), $clock: FixedClock(time::timestamp::from_unix_secs(1793176200)));
+    $z = $cal->now();
+    assert($cal->format($z, 'EEEE d MMMM HH:mm') == 'mercredi 28 octobre 09:30');
+    assert($cal->format($z->local(), 'EEE d MMM') == 'mer. 28 oct.');
+    assert($cal->format($z->time, 'HH:mm a') == '09:30 AM');
+    assert($cal->format($z->date, Format('MMMM')) == 'October');
+    assert($cal->format($z->time, Format('h a')) == '9 AM');
+    assert($cal->format($z->local(), Format('MMM')) == 'Oct');
+    assert($cal->format($z, Format('VV')) == 'Europe/Zurich');
+}

@@ -66,3 +66,47 @@ test human_periods
     assert(Period::zero()->human(Locale::fr()) == '0 seconde');
     assert(Period::weeks(2)->human(Locale::it()) == '2 settimane');
 }
+
+test human_relative_thresholds
+{
+    $cal = zurichCalendar(Locale::en());
+    $now = $cal->now();
+    assert($cal->human($now + time::duration::secs(44)) == 'now');
+    assert($cal->human($now + time::duration::secs(45)) == 'in 45 seconds');
+    assert($cal->human($now, Relative($numeric: true)) == 'in 0 seconds');
+    assert($cal->human($now - time::duration::secs(10), Relative($nowWithin: 5)) == '10 seconds ago');
+    assert($cal->human($now + time::duration::hours(23)) == 'in 23 hours');
+    assert($cal->human($now + time::duration::hours(26)) == 'tomorrow');
+    assert($cal->human($now - time::duration::hours(30)) == 'yesterday');
+    assert($cal->human($now + Period::days(2)) == 'in 2 days');
+    assert($cal->human($now + Period::days(7)) == 'in 1 week');
+    assert($cal->human($now + Period::days(13), Relative($rounding: .halfExpand)) == 'in 2 weeks');
+    assert($cal->human($now + Period::months(7), Relative($unit: .quarter)) == 'in 7 months');
+    assert($cal->human($now + Period::days(1), Relative($unit: .day, $numeric: true)) == 'in 1 day');
+    assert($cal->human($now - time::duration::millis(1500), Relative($unit: .millisecond)) == '1 second ago');
+}
+
+test human_relative_in_another_zone
+{
+    // read in the zone of "now": a time in New York tomorrow evening there is today here
+    $cal = zurichCalendar(Locale::en());
+    $ny = Zone(named: 'America/New_York');
+    Zoned $then = DateTime(2026, .october, 28, 18)->at($ny);
+    assert($cal->human($then) == 'in 13 hours');
+    Zoned $later = DateTime(2026, .october, 29, 18)->at($ny);
+    assert($cal->human($later) == 'tomorrow');
+}
+
+test human_dates_more
+{
+    $cal = zurichCalendar(Locale::de());
+    assert($cal->human(Date(2026, .october, 29)) == 'morgen');
+    assert($cal->human(Date(2026, .october, 26)) == 'vor 2 Tagen');
+    assert($cal->human(Date(2026, .december, 28)) == 'in 2 Monaten');
+    assert($cal->human(Date(2026, .october, 28), Relative($numeric: true)) == 'in 0 Tagen');
+    assert($cal->human(Date(2026, .october, 27), Relative($numeric: true)) == 'vor 1 Tag');
+    assert($cal->human(Date(2026, .november, 28), Relative($unit: .week)) == 'in 4 Wochen');
+    assert($cal->human(Date(2026, .october, 29), Relative($unit: .hour)) == 'morgen');
+    assert($cal->human(Date(2027, .april, 28), Relative($unit: .quarter)) == 'in 6 Monaten');
+    assert(Relative()->render(Date(2026, .january, 1), Date(2026, .march, 1), Locale::fr()) == 'il y a 2 mois');
+}

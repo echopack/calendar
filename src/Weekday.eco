@@ -29,6 +29,7 @@ public enum Weekday : uint8
     /**
      * The ISO number as an `int32`, Monday 1 to Sunday 7.
      */
+    #[inline]
     public const function number() : int32
     {
         return $this->value() as int32;
@@ -44,11 +45,17 @@ public enum Weekday : uint8
         return $w;
     }
 
+    /**
+     * The day after this one. Sunday wraps to Monday.
+     */
     public const function next() : Weekday
     {
         return $this->plus(1);
     }
 
+    /**
+     * The day before this one. Monday wraps to Sunday.
+     */
     public const function previous() : Weekday
     {
         return $this->plus(-1);

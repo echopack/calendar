@@ -1,0 +1,301 @@
+use calendar::{Zone, ZoneError, Zoned, Offset, SystemZones, Date, DateTime, Month, Disambiguation, PosixRule, RuleDate, Tzif};
+use std::time;
+
+function rule(const string& $text) : PosixRule
+{
+    PosixRule $r = guard PosixRule::parse($text);
+    return $r;
+}
+
+// a zone that has only a POSIX rule, as $TZ can name one
+function ruled(const string& $text) : Zone
+{
+    PosixRule $r = rule($text);
+    return Zone($text, [], [], [$r->standard], $r);
+}
+
+function push32(string& $out, int64 $value) : void
+{
+    uint32 $v = $value as int32 as uint32;
+    $out->push(($v >> 24) as uint8);
+    $out->push((($v >> 16) & 255) as uint8);
+    $out->push((($v >> 8) & 255) as uint8);
+    $out->push(($v & 255) as uint8);
+}
+
+// a version 1 zone file switching between type 0 and type 1 at $times, starting with $kind
+function tzif(array<int64> $times, int64 $before, int64 $after, int64 $kind, int64 $abbr) : string
+{
+    string $out = 'TZif';
+
+    for (int32 $i = 0; $i < 16; $i++) {
+        $out->push(0);
+    }
+
+    push32($out, 0);
+    push32($out, 0);
+    push32($out, 0);
+    push32($out, $times->count() as int64);
+    push32($out, 2);
+    push32($out, 8);
+
+    foreach ($times as const &$at) {
+        push32($out, $at);
+    }
+
+    foreach ($times as $i => const &$at) {
+        if ($i % 2 == 0) {
+            $out->push($kind as uint8);
+        } else {
+            $out->push(0);
+        }
+    }
+
+    push32($out, $before);
+    $out->push(0);
+    $out->push(0);
+    push32($out, $after);
+    $out->push(1);
+    $out->push($abbr as uint8);
+    $out->append("AAA\x00BBB\x00");
+    return $out;
+}
+
+test posix_rule_parses
+{
+    $cet = rule('CET-1CEST,M3.5.0,M10.5.0/3');
+    assert($cet->standard->offset == 3600);
+    assert($cet->standard->abbr == 'CET');
+    assert($cet->daylight->offset == 7200);
+    assert($cet->daylight->dst);
+    assert($cet->hasDst);
+    assert($cet->endTime == 10800);
+
+    // quoted names, minutes, and no daylight saving time
+    $tehran = rule('<+0330>-3:30');
+    assert($tehran->standard->abbr == '+0330');
+    assert($tehran->standard->offset == 12600);
+    assert(!$tehran->hasDst);
+
+    // a daylight offset of its own, and negative rule times
+    $odd = rule('<-03>3<-01>1,M3.5.0/-2,M10.5.0/-1');
+    assert($odd->standard->offset == -10800);
+    assert($odd->daylight->offset == -3600);
+    assert($odd->startTime == -7200);
+
+    // rule times may run to 167 hours; offsets stop at 25:59:59
+    assert(PosixRule::parse('XXX-1YYY,M3.5.0/167,M10.5.0') != null);
+    assert(PosixRule::parse('XXX-25:59:59') != null);
+}
+
+test posix_rule_refuses_malformed_text
+{
+    array<string> $bad = [
+        '', 'CE', 'CET', 'CET-1CEST,', 'CET-1CEST,M3.5.0', 'CET-1CEST,M13.1.0,M10.5.0',
+        'CET-1CEST,M3.6.0,M10.5.0', 'CET-1CEST,M3.5.7,M10.5.0', 'CET-1CEST,M3.5,M10.5.0',
+        'CET-1CEST,M3.5.0,M10.5.0x', '<+03', '<+03>', 'XXX-26', 'XXX-1YYY-30,M3.5.0,M10.5.0',
+    ];
+
+    foreach ($bad as const &$text) {
+        assert(PosixRule::parse($text) == null);
+    }
+}
+
+test posix_rule_transitions
+{
+    $cet = rule('CET-1CEST,M3.5.0,M10.5.0/3');
+    assert($cet->at(1774746000 - 1)->offset == 3600);
+    assert($cet->at(1774746000)->offset == 7200);
+    assert($cet->at(1792890000 - 1)->offset == 7200);
+    assert($cet->at(1792890000)->offset == 3600);
+    int64 $next = guard $cet->next(1774746000);
+    assert($next == 1792890000);
+    int64 $previous = guard $cet->previous(1792890000);
+    assert($previous == 1774746000);
+    int64 $first = guard $cet->next(0);
+    assert($first == 7520400);
+
+    // the old US default when the daylight rule is left out
+    $us = rule('EST5EDT');
+    assert($us->at(1772953200 - 1)->offset == -18000);
+    assert($us->at(1772953200)->offset == -14400);
+    assert($us->at(1793512800)->offset == -18000);
+
+    // the southern hemisphere has daylight saving time over New Year
+    $sydney = rule('AEST-10AEDT,M10.1.0,M4.1.0/3');
+    assert($sydney->at(1782864000)->offset == 36000);
+    assert($sydney->at(1767225600)->offset == 39600);
+
+    // a rule without daylight saving time never changes
+    $fixed = rule('<+0330>-3:30');
+    assert($fixed->next(0) == null);
+    assert($fixed->previous(0) == null);
+}
+
+test posix_rule_dates
+{
+    // Jn counts 1 to 365 and skips February 29, so J60 is always March 1
+    $j60 = RuleDate(0, 0, 0, 60);
+    assert($j60->serial(2024) == Date(2024, .march, 1)->epochDay());
+    assert($j60->serial(2023) == Date(2023, .march, 1)->epochDay());
+
+    // n counts from 0 and includes February 29
+    $n59 = RuleDate(1, 0, 0, 59);
+    assert($n59->serial(2024) == Date(2024, .february, 29)->epochDay());
+    assert($n59->serial(2023) == Date(2023, .march, 1)->epochDay());
+
+    // Mm.w.d: weekday d (Sunday 0) of week w, 5 meaning the last one
+    assert(RuleDate(2, 3, 5, 0)->serial(2026) == Date(2026, .march, 29)->epochDay());
+    assert(RuleDate(2, 2, 5, 0)->serial(2026) == Date(2026, .february, 22)->epochDay());
+    assert(RuleDate(2, 3, 1, 1)->serial(2026) == Date(2026, .march, 2)->epochDay());
+    assert(RuleDate(2, 3, 1, 6)->serial(2026) == Date(2026, .march, 7)->epochDay());
+    assert(RuleDate(2, 3, 2, 0)->serial(2026) == Date(2026, .march, 8)->epochDay());
+}
+
+test zone_from_a_rule_alone
+{
+    $ny = ruled('EST5EDT,M3.2.0,M11.1.0');
+    assert(!$ny->fixed());
+    assert(str::from(DateTime(2026, .march, 8, 2, 30)->at($ny)) == '2026-03-08T03:30:00-04:00[EST5EDT,M3.2.0,M11.1.0]');
+    assert(DateTime(2026, .march, 8, 2, 30)->resolve($ny, .reject)->failed());
+    assert($ny->candidates(DateTime(2026, .november, 1, 1, 30))->count() == 2);
+    Zoned $late = guard DateTime(2026, .november, 1, 1, 30)->resolve($ny, .later);
+    assert($late->offset == Offset(hours: -5));
+    assert($ny->abbreviation(time::timestamp::from_unix_secs(1772953200)) == 'EDT');
+    time::timestamp $next = guard $ny->next(time::timestamp::from_unix_secs(1772953200));
+    assert($next->unix_secs() == 1793512800);
+    time::timestamp $back = guard $ny->previous($next);
+    assert($back->unix_secs() == 1772953200);
+
+    // one offset forever is a fixed zone, rule or not
+    $tehran = ruled('<+0330>-3:30');
+    assert($tehran->fixed());
+    assert($tehran->offset(time::timestamp::from_unix_secs(1780000000)) == Offset(hours: 3, 30));
+    assert($tehran->next(time::timestamp::from_unix_secs(0)) == null);
+}
+
+test tzif_reads_a_handmade_file
+{
+    Zone $z = guard Tzif::parse('Test/Handmade', tzif([1000000000], 3600, 7200, 1, 4));
+    assert($z->id == 'Test/Handmade');
+    assert($z->offset(time::timestamp::from_unix_secs(999999999)) == Offset(hours: 1));
+    assert($z->offset(time::timestamp::from_unix_secs(1000000000)) == Offset(hours: 2));
+    assert($z->abbreviation(time::timestamp::from_unix_secs(999999999)) == 'AAA');
+    assert($z->abbreviation(time::timestamp::from_unix_secs(1000000000)) == 'BBB');
+    assert($z->dst(time::timestamp::from_unix_secs(1000000000)));
+    assert($z->next(time::timestamp::from_unix_secs(1000000000)) == null);
+
+    // the change at 01:46:40 UTC skips the local hour from 02:46:40
+    assert($z->candidates(DateTime(2001, .september, 9, 2, 46))->count() == 1);
+    assert($z->candidates(DateTime(2001, .september, 9, 3, 0))->count() == 0);
+    assert($z->candidates(DateTime(2001, .september, 9, 3, 47))->count() == 1);
+}
+
+test tzif_refuses_damaged_files
+{
+    assert(str::from(Tzif::parse('x', '')->failure()) == "the zone file for 'x' is damaged");
+    assert(Tzif::parse('x', 'TZif')->failed());
+    assert(Tzif::parse('x', 'not a zone file at all, but long enough to have a header')->failed());
+
+    // an offset no zone can have, an abbreviation past the text, a type that does not exist
+    assert(Tzif::parse('x', tzif([1000000000], 3600, 100000, 1, 4))->failed());
+    assert(Tzif::parse('x', tzif([1000000000], -100000, 3600, 1, 4))->failed());
+    assert(Tzif::parse('x', tzif([1000000000], 3600, 7200, 1, 8))->failed());
+    assert(Tzif::parse('x', tzif([1000000000], 3600, 7200, 2, 4))->failed());
+
+    // transitions have to run strictly upwards
+    assert(Tzif::parse('x', tzif([1000000000, 1100000000], 3600, 7200, 1, 4))->has_value());
+    assert(Tzif::parse('x', tzif([1100000000, 1000000000], 3600, 7200, 1, 4))->failed());
+    assert(Tzif::parse('x', tzif([1000000000, 1000000000], 3600, 7200, 1, 4))->failed());
+
+    // every cut of a real file either reads or fails; none stops the program
+    string $bytes = guard std::io::readfile('/usr/share/zoneinfo/Europe/Zurich');
+    usize $read = 0;
+
+    for (usize $n = 0; $n < $bytes->size(); $n = $n + 13) {
+        string $cut = string::from($bytes->sub(0, $n));
+
+        if (Tzif::parse('x', $cut)->has_value()) {
+            $read++;
+        }
+    }
+
+    assert($read < $bytes->size() / 13);
+    assert(Tzif::parse('x', $bytes)->has_value());
+}
+
+test system_zones_errors
+{
+    $none = SystemZones('/nonexistent/zoneinfo');
+    assert(str::from($none->load('Europe/Zurich')->failure()) == "no time zone named 'Europe/Zurich'");
+    Zone $utc = guard $none->load('UTC');
+    assert($utc->fixed());
+    assert($none->ids()->empty());
+
+    $system = SystemZones('/usr/share/zoneinfo');
+    assert($system->dir == '/usr/share/zoneinfo');
+    assert(str::from($system->load('zone.tab')->failure()) == "the zone file for 'zone.tab' is damaged");
+    assert($system->load('Europe')->failed());
+    assert(str::from($system->load('Europe/../../etc')->failure()) == "'Europe/../../etc' is not a time zone name");
+    assert($system->load('.hidden')->failed());
+    assert($system->load('Europe//Zurich')->failed());
+    assert($system->load('Europe/Zur ich')->failed());
+
+    // a second load is the same zone from the cache
+    Zone $a = guard $system->load('Europe/Zurich');
+    Zone $b = guard $system->load('Europe/Zurich');
+    assert($a->id == $b->id);
+
+    array<string> $ids = $system->ids();
+    bool $zurich = false;
+    bool $link = false;
+
+    foreach ($ids as const &$id) {
+        if ($id == 'Europe/Zurich') {
+            $zurich = true;
+        }
+
+        if ($id == 'Europe/Busingen') {
+            $link = true;
+        }
+    }
+
+    assert($zurich && $link);
+}
+
+test zone_error_text
+{
+    assert(str::from(ZoneError::unknown('A/B')) == "no time zone named 'A/B'");
+    assert(str::from(ZoneError::invalid('..')) == "'..' is not a time zone name");
+    assert(str::from(ZoneError::corrupt('A/B')) == "the zone file for 'A/B' is damaged");
+    assert(str::from(ZoneError::unreadable('A/B', 'denied')) == "the zone file for 'A/B' could not be read: denied");
+}
+
+test zones_that_bend_the_rules
+{
+    // checked against Python's zoneinfo on the same system files
+
+    // Troll goes from +00 to +02 for summer
+    $troll = Zone(named: 'Antarctica/Troll');
+    assert($troll->offset(time::timestamp::from_unix_secs(1790000000)) == Offset(hours: 2));
+    assert($troll->offset(time::timestamp::from_unix_secs(1792890000)) == Offset(0));
+    assert($troll->abbreviation(time::timestamp::from_unix_secs(1790000000)) == '+02');
+
+    // Dublin's summer time is its standard time in law; the wall clock is what matters
+    $dublin = Zone(named: 'Europe/Dublin');
+    assert(str::from(Zoned(time::timestamp::from_unix_secs(1780000000), $dublin)) == '2026-05-28T21:26:40+01:00[Europe/Dublin]');
+    assert($dublin->abbreviation(time::timestamp::from_unix_secs(1780000000)) == 'IST');
+    assert($dublin->abbreviation(time::timestamp::from_unix_secs(1795000000)) == 'GMT');
+
+    // quarter hours, half hours and the new rule in Iran
+    $chatham = Zone(named: 'Pacific/Chatham');
+    assert($chatham->offset(time::timestamp::from_unix_secs(1780000000)) == Offset(hours: 12, 45));
+    assert($chatham->offset(time::timestamp::from_unix_secs(1795000000)) == Offset(hours: 13, 45));
+    $stJohns = Zone(named: 'America/St_Johns');
+    assert($stJohns->offset(time::timestamp::from_unix_secs(1780000000)) == Offset(hours: -2, 30));
+    $tehran = Zone(named: 'Asia/Tehran');
+    assert($tehran->offset(time::timestamp::from_unix_secs(1650000000)) == Offset(hours: 4, 30));
+    assert($tehran->offset(time::timestamp::from_unix_secs(1780000000)) == Offset(hours: 3, 30));
+    $kolkata = Zone(named: 'Asia/Kolkata');
+    assert(str::from(Zoned(time::timestamp::from_unix_secs(0), $kolkata)) == '1970-01-01T05:30:00+05:30[Asia/Kolkata]');
+}

@@ -1,33 +1,60 @@
 namespace calendar;
 
+use std::thread;
+
 /**
- * Zones read from the operating system's compiled zone files: `$TZDIR` when it is set,
- * otherwise `/usr/share/zoneinfo`. The data is as fresh as the system's own updates.
+ * Zones read from compiled zone files (TZif) in a directory.
  *
- * Loaded zones are cached per instance. The cache is not locked; give each thread its own
- * source, or load what you need before sharing.
+ * `SystemZones()` reads the operating system's: `$TZDIR` when it is set and not empty,
+ * otherwise `/usr/share/zoneinfo`. The data is as fresh as the system's own updates.
+ * `SystemZones(dir)` reads any other directory laid out the same way, such as a copy shipped
+ * with the app.
+ *
+ * Loaded zones are cached per instance behind a lock, so one source can serve every thread.
+ * Two threads that load the same zone at once may both read the file; one copy is kept.
  */
+#[atomic]
 public class SystemZones : ZoneSource
 {
+    /**
+     * The directory zone names are resolved under.
+     */
     public const string $dir;
-    private map<string, Zone> $cache;
+    private thread::mutex<map<string, Zone>> $cache;
 
+    /**
+     * Zones from `$dir`, a directory of compiled zone files named by zone id. Nothing is read
+     * until the first `load`.
+     */
     constructor(string $dir)
     {
         $this->dir = $dir;
-        $this->cache = map<string, Zone>();
+        $this->cache = thread::mutex<map<string, Zone>>(map<string, Zone>());
     }
 
+    /**
+     * Zones from `$TZDIR` when it is set and not empty, otherwise `/usr/share/zoneinfo`.
+     */
     constructor()
     {
         $this->dir = SystemZones::defaultDir();
-        $this->cache = map<string, Zone>();
+        $this->cache = thread::mutex<map<string, Zone>>(map<string, Zone>());
     }
 
+    /**
+     * The zone named `$id`, from the cache or from `$dir/$id`.
+     *
+     * The name is checked with `valid` before it touches the filesystem, so `../etc/passwd`
+     * is `ZoneError::invalid` and never opened. A missing file is `ZoneError::unknown`, except
+     * for `UTC`, which falls back to `Zone::utc()` whenever its file cannot be read.
+     */
     public function load(const string& $id) : result<Zone, ZoneError>
     {
-        if ($this->cache->has($id)) {
-            return .ok($this->cache->get($id));
+        Zone? $cached = $this->cached($id);
+
+        if ($cached != null) {
+            Zone $hit = guard $cached;
+            return .ok($hit);
         }
 
         if (!SystemZones::valid($id)) {
@@ -50,8 +77,21 @@ public class SystemZones : ZoneSource
             return .error($e);
         };
 
-        $this->cache->set($id, $zone);
+        thread::locked<map<string, Zone>> $held = $this->cache->lock();
+        $held->value->set($id, $zone);
         return .ok($zone);
+    }
+
+    // the zone already loaded under $id, read under the lock
+    private function cached(const string& $id) : Zone?
+    {
+        thread::locked<map<string, Zone>> $held = $this->cache->lock();
+
+        if ($held->value->has($id)) {
+            return $held->value->get($id);
+        }
+
+        return null;
     }
 
     /**

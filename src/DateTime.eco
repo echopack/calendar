@@ -1,5 +1,6 @@
 namespace calendar;
 
+use std::math;
 use std::time;
 
 /**
@@ -8,18 +9,41 @@ use std::time;
  * "The meeting is at 09:30 on Friday" before anyone says where. It is not a moment: the same
  * wall clock happens at a different instant in every zone. Put it in a zone with `at()` to
  * get a `Zoned`. Arithmetic here is plain wall-clock arithmetic; every day is 24 hours long.
+ *
+ * ```echo
+ * $call = DateTime(2026, .march, 27, 22, 0) + time::duration::hours(3);
+ * echo "{$call}";                         // 2026-03-28T01:00:00
+ * $gap = DateTime(2026, .march, 29, 2, 30)->at(Zone(named: 'Europe/Zurich'));
+ * echo "{$gap}";                          // 2026-03-29T03:30:00+02:00[Europe/Zurich]
+ * ```
  */
+#[docs::groups: ["Constructors", "Read", "Adjust", "Arithmetic", "Differences", "Convert", "Format"]]
+#[docs::see: ["Date", "Time", "Zoned"]]
 public struct DateTime : contract::comparable<DateTime>
 {
+    /**
+     * The calendar day.
+     */
     public const Date $date;
+
+    /**
+     * The time of day on that date.
+     */
     public const Time $time;
 
+    /**
+     * A date and a time of day put together.
+     */
     constructor(Date $date, Time $time)
     {
         $this->date = $date;
         $this->time = $time;
     }
 
+    /**
+     * A date and time from numbers you write in code. An impossible date or time stops the
+     * program; use `DateTime::of` for numbers that arrive at runtime.
+     */
     constructor(int32 $year, Month $month, int32 $day, int32 $hour = 0, int32 $minute = 0, int32 $second = 0, int32 $nanosecond = 0)
     {
         $this->date = Date($year, $month, $day);
@@ -27,8 +51,10 @@ public struct DateTime : contract::comparable<DateTime>
     }
 
     /**
-     * A date and time from runtime numbers, checked.
+     * A date and time from runtime numbers, checked: an impossible date or time comes back
+     * as a `DateError` instead of stopping the program.
      */
+    #[docs::group: "Constructors"]
     public static function of(int64 $year, int64 $month, int64 $day, int64 $hour = 0, int64 $minute = 0, int64 $second = 0, int64 $nanosecond = 0) : result<DateTime, DateError>
     {
         Date $date = guard Date::of($year, $month, $day) else ($e) {
@@ -46,6 +72,7 @@ public struct DateTime : contract::comparable<DateTime>
      * Parse ISO 8601 `2026-10-28T14:05`, with optional seconds and fraction. A space may
      * stand in for the `T`. No offset or zone is accepted; that text is a `Zoned`.
      */
+    #[docs::group: "Constructors"]
     public static function parse(const string& $text) : result<DateTime, ParseError>
     {
         Scanner $s = Scanner($text);
@@ -64,9 +91,11 @@ public struct DateTime : contract::comparable<DateTime>
      * Parse with a pattern, `dd.MM.yyyy HH:mm`. Date fields as for `Date::parse`, time fields
      * as for `Time::parse`.
      */
+    #[docs::group: "Constructors"]
     public static function parse(const string& $text, const Format& $format) : result<DateTime, ParseError>
     {
-        Fields $f = guard Fields::read($format, $text, Zone::system()) else ($e) {
+        Fields $f = Fields();
+        guard Fields::read($f, $format, $text, null) else ($e) {
             return .error($e);
         };
 
@@ -84,13 +113,21 @@ public struct DateTime : contract::comparable<DateTime>
     /**
      * Add a period. Years and months move the date with the day clamped, weeks and days move
      * it by whole days, and the clock fields move the time, carrying into the date.
+     *
+     * A result outside the years -9999 to 9999 stops the program.
      */
+    #[docs::group: "Arithmetic"]
     public const function add(const Period& $p) : DateTime
     {
         DateTime $dt = guard $this->add($p, .clamp);
         return $dt;
     }
 
+    /**
+     * Add a period with an explicit overflow rule. `.reject` fails instead of clamping the
+     * day, and a result outside the supported years is an error instead of a stop.
+     */
+    #[docs::group: "Arithmetic"]
     public const function add(const Period& $p, Overflow $mode) : result<DateTime, DateError>
     {
         Date $date = guard $this->date->shift($p->totalMonths(), $p->totalDays(), $mode) else ($e) {
@@ -100,22 +137,34 @@ public struct DateTime : contract::comparable<DateTime>
         return DateTime($date, $this->time)->moved($p->exact());
     }
 
+    /**
+     * Add an exact length on the wall clock, carrying into the date. Every day here is 24
+     * hours; DST only exists on a `Zoned`.
+     */
+    #[docs::group: "Arithmetic"]
     public const function add(const time::duration& $d) : DateTime
     {
         DateTime $dt = guard $this->moved($d);
         return $dt;
     }
 
+    /**
+     * Subtract a period, the mirror of `add`: the day clamps when the target month is
+     * shorter, and the clock fields borrow from the date.
+     */
+    #[docs::group: "Arithmetic"]
     public const function sub(const Period& $p) : DateTime
     {
         return $this->add(-$p);
     }
 
+    #[docs::group: "Arithmetic"]
     public const function sub(const Period& $p, Overflow $mode) : result<DateTime, DateError>
     {
         return $this->add(-$p, $mode);
     }
 
+    #[docs::group: "Arithmetic"]
     public const function sub(const time::duration& $d) : DateTime
     {
         return $this->add(-$d);
@@ -125,6 +174,7 @@ public struct DateTime : contract::comparable<DateTime>
      * The calendar distance to `$other`: years, months and days as `Date::until` counts them,
      * then hours, minutes, seconds and nanoseconds. `$a + $a->until($b)` lands on `$b`.
      */
+    #[docs::group: "Differences"]
     public const function until(const DateTime& $other) : Period
     {
         int64 $clock = $other->time->nanos() - $this->time->nanos();
@@ -147,36 +197,38 @@ public struct DateTime : contract::comparable<DateTime>
     /**
      * How many whole `$unit`s from here to `$other`, positive when `$other` is later.
      */
+    #[docs::group: "Differences"]
     public const function until(const DateTime& $other, Unit $unit, Rounding $mode = .trunc) : int64
     {
         if (!$unit->calendar()) {
             return $unit->count($this->span($other), $mode);
         }
 
+        // in epoch days, since rounding may look one step past the end of the range; the
+        // clock is the same at every step, so only the days and $other's clock differ
         int64 $step = $unit->months();
         int64 $whole = $this->until($other)->totalMonths() / $step;
-        DateTime $base = $this->months($whole * $step);
-        time::duration $rest = $base->span($other);
+        int64 $base = $this->date->monthsSerial($whole * $step);
+        int64 $rest = ($other->date->epochDay() - $base) * NANOS_PER_DAY + $other->time->nanos() - $this->time->nanos();
 
-        if ($rest->is_zero()) {
+        if ($rest == 0) {
             return $whole;
         }
 
-        int64 $toward = 1;
-
-        if ($rest->is_negative()) {
-            $toward = -1;
-        }
-
-        DateTime $next = $this->months(($whole + $toward) * $step);
-        return $mode->apply($whole, $rest->as_nanos(), $base->span($next)->abs()->as_nanos());
+        int64 $next = $this->date->monthsSerial(($whole + sign64($rest)) * $step);
+        return $mode->apply($whole, $rest, math::abs($next - $base) * NANOS_PER_DAY);
     }
 
+    /**
+     * The mirror of `until`: the calendar distance from `$other` to this date and time.
+     */
+    #[docs::group: "Differences"]
     public const function since(const DateTime& $other) : Period
     {
         return $other->until($this);
     }
 
+    #[docs::group: "Differences"]
     public const function since(const DateTime& $other, Unit $unit, Rounding $mode = .trunc) : int64
     {
         return $other->until($this, $unit, $mode);
@@ -184,7 +236,9 @@ public struct DateTime : contract::comparable<DateTime>
 
     /**
      * The start of the year, quarter, month, week, day, hour, minute or second this is in.
+     * Units of a day and up land on midnight; weeks start where `$rule` says.
      */
+    #[docs::group: "Adjust"]
     public const function start(Unit $unit, WeekRule $rule = WeekRule::iso()) : DateTime
     {
         if (!$unit->clock()) {
@@ -196,8 +250,9 @@ public struct DateTime : contract::comparable<DateTime>
 
     /**
      * Round to a multiple of `$unit`, a day or smaller. Rounding up from 23:59:59.6 to the
-     * second carries into the next day.
+     * second carries into the next day. Weeks, months, quarters and years stop the program.
      */
+    #[docs::group: "Adjust"]
     public const function round(Unit $unit, Rounding $mode = .halfExpand) : DateTime
     {
         if ($unit->calendar() || $unit == Unit::week) {
@@ -215,15 +270,17 @@ public struct DateTime : contract::comparable<DateTime>
      * A copy with some fields replaced. The day clamps to the target month, as in
      * `Date->with`.
      */
+    #[docs::group: "Adjust"]
     public const function with(int32? $year = null, Month? $month = null, int32? $day = null, int32? $hour = null, int32? $minute = null, int32? $second = null, int32? $nanosecond = null) : DateTime
     {
         return DateTime($this->date->with($year, $month, $day), $this->time->with($hour, $minute, $second, $nanosecond));
     }
 
     /**
-     * Render with a pattern, `dd.MM.yyyy`, names in `$locale`. A bad pattern stops the
+     * Render with a pattern, `dd.MM.yyyy HH:mm`, names in `$locale`. A bad pattern stops the
      * program; compile runtime patterns with `Format::of` first.
      */
+    #[docs::group: "Format"]
     public const function format(const string& $pattern, Locale $locale = Locale::en()) : string
     {
         return Format($pattern)->locale($locale)->render($this);
@@ -232,6 +289,7 @@ public struct DateTime : contract::comparable<DateTime>
     /**
      * Render with a compiled format, in the format's own language.
      */
+    #[docs::group: "Format"]
     public const function format(const Format& $format) : string
     {
         return $format->render($this);
@@ -241,21 +299,72 @@ public struct DateTime : contract::comparable<DateTime>
      * This wall clock in `$zone`. A time skipped by a DST change moves forward by the gap and
      * a repeated time takes the earlier instant; use `resolve` to choose or to fail instead.
      */
-    public const function at(Zone $zone) : Zoned
+    #[docs::group: "Convert"]
+    public const function at(const Zone& $zone) : Zoned
     {
         Zoned $z = guard $this->resolve($zone, .compatible);
         return $z;
     }
 
     /**
-     * This wall clock in `$zone`, with the DST rule spelled out.
+     * This wall clock in `$zone`, with the DST rule spelled out. Under `.reject` a time that
+     * a DST change skips or repeats is an error.
      */
-    public const function resolve(Zone $zone, Disambiguation $how) : result<Zoned, DateError>
+    #[docs::group: "Convert"]
+    public const function resolve(const Zone& $zone, Disambiguation $how) : result<Zoned, DateError>
+    {
+        int64 $wall = $this->wall();
+        WallOffsets $w = $zone->local($wall);
+
+        if ($w->kind == WallKind::single) {
+            return .ok(Zoned(wall: $wall, $this, $zone, $w->before));
+        }
+
+        if ($w->kind == WallKind::fold) {
+            if ($how == Disambiguation::reject) {
+                return .error(.overlap($zone->id));
+            }
+
+            // the offset before the change is the earlier instant
+            if ($how == Disambiguation::later) {
+                return .ok(Zoned(wall: $wall, $this, $zone, $w->after));
+            }
+
+            return .ok(Zoned(wall: $wall, $this, $zone, $w->before));
+        }
+
+        if ($w->kind == WallKind::scan) {
+            return $this->resolveScanned($zone, $how);
+        }
+
+        if ($how == Disambiguation::reject) {
+            return .error(.gap($zone->id));
+        }
+
+        return $this->resolveGap($wall, $zone, $how);
+    }
+
+    // a skipped reading: move by the length of the gap, forward unless asked for earlier
+    private const function resolveGap(int64 $wall, const Zone& $zone, Disambiguation $how) : result<Zoned, DateError>
+    {
+        int64 $before = $zone->offsetAt($wall - SECS_PER_DAY) as int64;
+        int64 $after = $zone->offsetAt($wall + SECS_PER_DAY) as int64;
+        int64 $shift = $before;
+
+        if ($how == Disambiguation::earlier) {
+            $shift = $after;
+        }
+
+        return Zoned::of($this->instant($shift), $zone);
+    }
+
+    // past the zone's table: ask for every candidate offset
+    private const function resolveScanned(const Zone& $zone, Disambiguation $how) : result<Zoned, DateError>
     {
         array<Offset> $found = $zone->candidates($this);
 
         if ($found->count() == 1) {
-            return .ok(Zoned($this->instant($found[0]->seconds as int64), $zone));
+            return Zoned::of($this->instant($found[0]->seconds as int64), $zone);
         }
 
         if ($found->count() > 1) {
@@ -269,23 +378,14 @@ public struct DateTime : contract::comparable<DateTime>
                 $o = $found[$found->count() - 1];
             }
 
-            return .ok(Zoned($this->instant($o->seconds as int64), $zone));
+            return Zoned::of($this->instant($o->seconds as int64), $zone);
         }
 
         if ($how == Disambiguation::reject) {
             return .error(.gap($zone->id));
         }
 
-        int64 $wall = $this->wall();
-        int64 $before = $zone->type($wall - SECS_PER_DAY)->offset as int64;
-        int64 $after = $zone->type($wall + SECS_PER_DAY)->offset as int64;
-        int64 $shift = $before;
-
-        if ($how == Disambiguation::earlier) {
-            $shift = $after;
-        }
-
-        return .ok(Zoned($this->instant($shift), $zone));
+        return $this->resolveGap($this->wall(), $zone, $how);
     }
 
     // the wall clock read as Unix seconds, as if it were UTC
@@ -305,12 +405,6 @@ public struct DateTime : contract::comparable<DateTime>
     {
         int64 $days = $other->date->epochDay() - $this->date->epochDay();
         return time::duration::secs($days * SECS_PER_DAY) + time::duration::nanos($other->time->nanos() - $this->time->nanos());
-    }
-
-    // this date-time plus $n months, day clamped, clock unchanged
-    internal const function months(int64 $n) : DateTime
-    {
-        return DateTime($this->date->months($n), $this->time);
     }
 
     // add an exact length on the wall clock

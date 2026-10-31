@@ -1,0 +1,175 @@
+use calendar::{Date, Time, Month, Weekday, Week, WeekRule, Unit, Rounding, Plural, Field};
+
+test month_numbers_and_steps
+{
+    assert(Month::january->number() == 1);
+    assert(Month::december->number() == 12);
+    assert(Month::of(0) == null);
+    assert(Month::of(13) == null);
+    assert(Month::of(-1) == null);
+    Month $dec = guard Month::of(12);
+    assert($dec == Month::december);
+
+    assert(Month::december->next() == Month::january);
+    assert(Month::january->previous() == Month::december);
+    assert(Month::march->plus(-15) == Month::december);
+    assert(Month::march->plus(24) == Month::march);
+    assert(Month::march->plus(0) == Month::march);
+
+    assert(Month::january->quarter() == 1);
+    assert(Month::march->quarter() == 1);
+    assert(Month::april->quarter() == 2);
+    assert(Month::september->quarter() == 3);
+    assert(Month::december->quarter() == 4);
+}
+
+test month_lengths
+{
+    array<int32> $common = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    array<int32> $leap = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+    for (int64 $i = 1; $i <= 12; $i++) {
+        Month $m = guard Month::of($i);
+        assert($m->days(2023) == $common[($i - 1) as usize]);
+        assert($m->days(2024) == $leap[($i - 1) as usize]);
+        assert($m->days(2100) == $common[($i - 1) as usize]);
+        assert($m->days(2000) == $leap[($i - 1) as usize]);
+    }
+
+    // year 0 and negative leap years follow the same rule
+    assert(Month::february->days(0) == 29);
+    assert(Month::february->days(-100) == 28);
+    assert(Month::february->days(-400) == 29);
+}
+
+test weekday_numbers_and_steps
+{
+    assert(Weekday::monday->number() == 1);
+    assert(Weekday::sunday->number() == 7);
+    assert(Weekday::of(0) == null);
+    assert(Weekday::of(8) == null);
+    Weekday $fri = guard Weekday::of(5);
+    assert($fri == Weekday::friday);
+
+    assert(Weekday::sunday->next() == Weekday::monday);
+    assert(Weekday::monday->previous() == Weekday::sunday);
+    assert(Weekday::wednesday->plus(-10) == Weekday::sunday);
+    assert(Weekday::wednesday->plus(14) == Weekday::wednesday);
+
+    assert(Weekday::monday->until(Weekday::sunday) == 6);
+    assert(Weekday::sunday->until(Weekday::monday) == 1);
+    assert(Weekday::friday->until(Weekday::friday) == 0);
+    assert(Weekday::saturday->until(Weekday::friday) == 6);
+}
+
+test week_rules_other_than_iso
+{
+    // weeks start on Monday and week 1 is the first full week
+    $full = WeekRule(.monday, 7);
+    assert(Date(2026, .january, 1)->week($full) == Week(2025, 52));
+    assert(Date(2025, .december, 31)->week($full) == Week(2025, 52));
+    assert(Date(2027, .january, 1)->week($full) == Week(2026, 52));
+    assert(Date(2026, .january, 5)->week($full) == Week(2026, 1));
+    assert($full->weeks(2026) == 52);
+
+    // weeks start on Saturday and week 1 holds January 1
+    $saturday = WeekRule(.saturday, 1);
+    assert(Date(2026, .january, 1)->week($saturday) == Week(2026, 1));
+    assert(Date(2025, .december, 31)->week($saturday) == Week(2026, 1));
+    assert(Date(2027, .january, 1)->week($saturday) == Week(2027, 1));
+    assert($saturday->weeks(2027) == 53);
+    assert($saturday->weeks(2026) == 52);
+
+    // Sunday weeks with the ISO minimum
+    $sunday = WeekRule(.sunday, 4);
+    assert(Date(2026, .january, 1)->week($sunday) == Week(2025, 53));
+    assert(Date(2027, .january, 1)->week($sunday) == Week(2026, 52));
+    assert($sunday->weeks(2025) == 53);
+    assert($sunday->weeks(2020) == 53);
+
+    // a week date and its date agree under every rule
+    array<WeekRule> $rules = [WeekRule::iso(), $full, $saturday, $sunday, WeekRule(.sunday, 1)];
+    array<Date> $days = [Date(2026, .january, 1), Date(2020, .december, 31), Date(2021, .january, 3), Date(2027, .june, 15)];
+
+    foreach ($rules as const &$rule) {
+        foreach ($days as const &$day) {
+            Week $w = $day->week($rule);
+            assert(Date(week: $w, $day->weekday(), $rule) == $day);
+        }
+    }
+}
+
+test week_text_and_equality
+{
+    assert(str::from(Week(2026, 1)) == '2026-W01');
+    assert(str::from(Week(-44, 12)) == '-0044-W12');
+    assert(Week(2026, 1) != Week(2026, 2));
+    assert(Week(2026, 1) != Week(2025, 1));
+}
+
+test unit_kinds
+{
+    assert(Unit::year->calendar());
+    assert(Unit::quarter->calendar());
+    assert(Unit::month->calendar());
+    assert(!Unit::week->calendar());
+    assert(!Unit::day->calendar());
+
+    assert(!Unit::day->clock());
+    assert(!Unit::week->clock());
+    assert(Unit::hour->clock());
+    assert(Unit::nanosecond->clock());
+}
+
+test rounding_modes
+{
+    // 2.5 hours, both ways
+    $nine = Time(9);
+    $half = Time(11, 30);
+    assert($nine->until($half, .hour, .trunc) == 2);
+    assert($nine->until($half, .hour, .floor) == 2);
+    assert($nine->until($half, .hour, .ceil) == 3);
+    assert($nine->until($half, .hour, .halfExpand) == 3);
+    assert($nine->until($half, .hour, .halfEven) == 2);
+    assert($half->until($nine, .hour, .trunc) == -2);
+    assert($half->until($nine, .hour, .floor) == -3);
+    assert($half->until($nine, .hour, .ceil) == -2);
+    assert($half->until($nine, .hour, .halfExpand) == -3);
+    assert($half->until($nine, .hour, .halfEven) == -2);
+
+    // 3.5 goes to the even 4, and -3.5 to -4
+    assert(Time(8)->until($half, .hour, .halfEven) == 4);
+    assert($half->until(Time(8), .hour, .halfEven) == -4);
+
+    // below and above the half
+    $quarter = Time(11, 15);
+    assert($nine->until($quarter, .hour, .halfExpand) == 2);
+    assert($nine->until($quarter, .hour, .halfEven) == 2);
+    assert($nine->until($quarter, .hour, .ceil) == 3);
+    assert($nine->until(Time(11, 45), .hour, .halfEven) == 3);
+
+    // exact counts are never moved
+    assert($nine->until(Time(11), .hour, .ceil) == 2);
+    assert($nine->until(Time(11), .hour, .floor) == 2);
+}
+
+test plural_rules
+{
+    assert(Plural::one->singular(1));
+    assert(Plural::one->singular(-1));
+    assert(!Plural::one->singular(0));
+    assert(!Plural::one->singular(2));
+    assert(Plural::zeroAndOne->singular(0));
+    assert(Plural::zeroAndOne->singular(1));
+    assert(Plural::zeroAndOne->singular(-1));
+    assert(!Plural::zeroAndOne->singular(2));
+}
+
+test field_labels
+{
+    assert(Field::dayOfYear->label() == 'day of year');
+    assert(Field::weekYear->label() == 'week year');
+    assert(Field::dayPeriod->label() == 'day period');
+    assert(Field::nanosecond->label() == 'nanosecond');
+    assert(Field::zone->label() == 'zone');
+}

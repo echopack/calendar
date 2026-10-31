@@ -1,0 +1,155 @@
+namespace calendar;
+
+/**
+ * Where a format writes its output: a buffer on the stack that becomes one string at the end,
+ * so a rendering costs a single string however many fields it has. Output longer than the
+ * buffer moves into `$spill` a buffer at a time.
+ */
+internal struct Writer
+{
+    private uint8[128] $bytes;
+    private usize $size;
+    private string $spill;
+
+    constructor()
+    {
+        $this->size = 0;
+        $this->spill = '';
+    }
+
+    internal function push(uint8 $b) : void
+    {
+        if ($this->size == 128) {
+            $this->flush();
+        }
+
+        $this->bytes[$this->size] = $b;
+        $this->size++;
+    }
+
+    internal function text(const string& $s) : void
+    {
+        usize $n = $s->size();
+
+        if ($n == 1 && $this->size < 128) {
+            $this->bytes[$this->size] = $s->byte(0);
+            $this->size++;
+            return;
+        }
+
+        if ($this->size + $n > 128) {
+            $this->flush();
+
+            if ($n > 128) {
+                $this->spill->append($s);
+                return;
+            }
+        }
+
+        for (usize $i = 0; $i < $n; $i++) {
+            $this->bytes[$this->size + $i] = $s->byte($i);
+        }
+
+        $this->size = $this->size + $n;
+    }
+
+    /**
+     * A decimal number zero padded to at least `$width` digits, the sign in front of the
+     * padding: -44 at width 4 is `-0044`. The same text as `pad`.
+     */
+    internal function number(int64 $value, usize $width) : void
+    {
+        // the common shapes write straight into the buffer after one room check
+        if ($value >= 0 && $value < 100 && $width <= 2) {
+            $this->room(2);
+            usize $at = $this->size;
+
+            if ($width == 2 || $value >= 10) {
+                $this->bytes[$at] = Writer::digit($value / 10);
+                $at++;
+            }
+
+            $this->bytes[$at] = Writer::digit($value % 10);
+            $this->size = $at + 1;
+            return;
+        }
+
+        if ($value >= 0 && $value < 10000 && $width == 4) {
+            $this->room(4);
+            usize $at = $this->size;
+            $this->bytes[$at] = Writer::digit($value / 1000);
+            $this->bytes[$at + 1] = Writer::digit($value / 100 % 10);
+            $this->bytes[$at + 2] = Writer::digit($value / 10 % 10);
+            $this->bytes[$at + 3] = Writer::digit($value % 10);
+            $this->size = $at + 4;
+            return;
+        }
+
+        $this->wide($value, $width);
+    }
+
+    // make sure $n more bytes fit in the buffer
+    private function room(usize $n) : void
+    {
+        if ($this->size + $n > 128) {
+            $this->flush();
+        }
+    }
+
+    // any number at any width, written backwards into a scratch buffer
+    private function wide(int64 $value, usize $width) : void
+    {
+        uint64 $v = $value as uint64;
+
+        if ($value < 0) {
+            $this->push(45);
+            // the negation of the most negative int64 is itself as an unsigned value
+            $v = (0 - $v);
+        }
+
+        uint8[20] $scratch;
+        usize $count = 0;
+
+        while (true) {
+            $scratch[$count] = Writer::digit(($v % 10) as int64);
+            $count++;
+            $v = $v / 10;
+
+            if ($v == 0) {
+                break;
+            }
+        }
+
+        for (usize $i = $count; $i < $width; $i++) {
+            $this->push(48);
+        }
+
+        while ($count > 0) {
+            $count--;
+            $this->push($scratch[$count]);
+        }
+    }
+
+    internal function finish() : string
+    {
+        if ($this->spill->empty()) {
+            return str::from(&$this->bytes[0], $this->size);
+        }
+
+        $this->flush();
+        return $this->spill;
+    }
+
+    private function flush() : void
+    {
+        if ($this->size > 0) {
+            $this->spill->append(str::from(&$this->bytes[0], $this->size));
+            $this->size = 0;
+        }
+    }
+
+    private static function digit(int64 $d) : uint8
+    {
+        return ($d + 48) as uint8;
+    }
+}

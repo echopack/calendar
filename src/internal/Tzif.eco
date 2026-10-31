@@ -54,11 +54,18 @@ internal struct Tzif
         array<ZoneType> $types = arr::room<ZoneType>($typecnt);
 
         for ($i = 0; $i < $timecnt; $i++) {
+            int64 $time = Tzif::u32($bytes, $at + $i * 4) as int32 as int64;
+
             if ($width == 8) {
-                $times[] = Tzif::i64($bytes, $at + $i * 8);
-            } else {
-                $times[] = Tzif::u32($bytes, $at + $i * 4) as int32 as int64;
+                $time = Tzif::i64($bytes, $at + $i * 8);
             }
+
+            // transitions run strictly upwards, and none can matter past the year 9999
+            if ($time > LAST_SECOND || ($i > 0 && $time <= $times[$i - 1])) {
+                return .error(.corrupt($id));
+            }
+
+            $times[] = $time;
         }
 
         $at = $at + $timecnt * $width;
@@ -82,7 +89,7 @@ internal struct Tzif
             bool $dst = $bytes->byte($p + 4) != 0;
             usize $abbr = $bytes->byte($p + 5) as usize;
 
-            if ($abbr >= $charcnt) {
+            if ($abbr >= $charcnt || $offset < -MAX_OFFSET || $offset > MAX_OFFSET) {
                 return .error(.corrupt($id));
             }
 

@@ -1,4 +1,4 @@
-use calendar::{Time, Unit, Rounding};
+use calendar::{Time, Date, DateTime, Unit, Rounding};
 use std::time;
 
 test time_basics
@@ -50,4 +50,70 @@ test time_rounds_sub_second_units
     assert($t->round(.millisecond) == Time(14, 5, 9, 123000000));
     assert($t->round(.microsecond) == Time(14, 5, 9, 123457000));
     assert($t->round(.nanosecond) == $t);
+}
+
+test time_builders_and_checks
+{
+    assert(Time::midnight() == Time(0));
+    assert(Time::noon() == Time(12));
+    assert(Time::midnight()->nanos() == 0);
+    assert(Time(23, 59, 59, 999999999)->nanos() == 86399999999999);
+    Time $ok = guard Time::of(23, 59, 59, 999999999);
+    assert($ok == Time(23, 59, 59, 999999999));
+    assert(str::from(Time::of(-1)->failure()) == 'hour -1 is out of range');
+    assert(str::from(Time::of(0, 0, 60)->failure()) == 'second 60 is out of range');
+    assert(str::from(Time::of(0, 0, 0, 1000000000)->failure()) == 'nanosecond 1000000000 is out of range');
+    assert(str::from(Time::of(0, -1)->failure()) == 'minute -1 is out of range');
+
+    $t = Time(9, 30, 15);
+    assert($t->with($hour: 17) == Time(17, 30, 15));
+    assert($t->with($second: 0, $nanosecond: 5) == Time(9, 30, 0, 5));
+    assert($t->on(Date(2026, .october, 28)) == DateTime(2026, .october, 28, 9, 30, 15));
+    assert(Time(9) < Time(9, 0, 0, 1));
+    assert(Time(10) > Time(9, 59, 59, 999999999));
+    assert(Time(9) != Time(10));
+}
+
+test time_moves_and_counts
+{
+    assert(Time(10) - time::duration::mins(90) == Time(8, 30));
+    assert(Time(0) - time::duration::nanos(1) == Time(23, 59, 59, 999999999));
+    assert(Time(0) + time::duration::hours(-49) == Time(23));
+    assert(Time(12) + time::duration::millis(1500) == Time(12, 0, 1, 500000000));
+    assert(Time(17)->since(Time(9)) == time::duration::hours(8));
+    assert(Time(17)->since(Time(9), .minute) == 480);
+    assert(Time(9)->until(Time(9, 0, 0, 1500), .microsecond) == 1);
+    assert(Time(9)->until(Time(9, 0, 0, 1500), .microsecond, .ceil) == 2);
+    assert(Time(9, 0, 1)->until(Time(9), .millisecond) == -1000);
+}
+
+test time_rounds_in_every_mode
+{
+    $t = Time(10, 7, 30);
+    assert($t->round(.minute) == Time(10, 8));
+    assert($t->round(.minute, .halfEven) == Time(10, 8));
+    assert(Time(10, 8, 30)->round(.minute, .halfEven) == Time(10, 8));
+    assert($t->round(.minute, .floor) == Time(10, 7));
+    assert($t->round(.minute, .ceil) == Time(10, 8));
+    assert($t->round(.minute, .trunc) == Time(10, 7));
+    assert($t->round(.hour, .ceil) == Time(11));
+    assert(Time(23, 30)->round(.hour) == Time(0));
+    assert(Time(10)->round(.hour, .ceil) == Time(10));
+    assert($t->start(.minute) == Time(10, 7));
+    assert(Time(10, 7, 30, 999)->start(.second) == $t);
+}
+
+test time_parse_edges
+{
+    Time $comma = guard Time::parse('14:05:09,5');
+    assert($comma == Time(14, 5, 9, 500000000));
+    Time $nine = guard Time::parse('14:05:09.123456789');
+    assert($nine->nanosecond == 123456789);
+    assert(str::from(Time::parse('14:05:09.1234567891')->failure()) == 'unexpected text at byte 18');
+    assert(str::from(Time::parse('14:05:09.')->failure()) == 'expected a digit at byte 9');
+    assert(str::from(Time::parse('14:60')->failure()) == 'minute 60 at byte 3 is out of range');
+    assert(str::from(Time::parse('14:05:61')->failure()) == 'second 61 at byte 6 is out of range');
+    assert(str::from(Time::parse('1405')->failure()) == "expected ':' at byte 2");
+    assert(str::from(Time::parse('')->failure()) == 'expected a two-digit hour at byte 0');
+    assert(Time::parse('14:05.5')->failed());
 }

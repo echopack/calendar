@@ -1,4 +1,4 @@
-use calendar::{Date, DateRange, Period, Unit};
+use calendar::{Date, DateRange, Period, Unit, WeekRule};
 
 test range_bounds
 {
@@ -56,4 +56,133 @@ test range_of_a_unit
     assert($week->count() == 7);
     assert(Date(2024, .june, 1)->span(.year)->count() == 366);
     assert(Date(2026, .june, 1)->span(.day)->count() == 1);
+}
+
+test range_empty_and_disjoint_share_nothing
+{
+    $oct = DateRange(from: Date(2026, .october, 1), until: Date(2026, .november, 1));
+    $empty = DateRange(from: Date(2026, .october, 15), until: Date(2026, .october, 15));
+    assert($empty->empty());
+    assert($empty->count() == 0);
+    assert($empty->last() == null);
+    assert(!$empty->has(Date(2026, .october, 15)));
+
+    // an empty range inside another still shares no day
+    assert(!$oct->overlaps($empty));
+    assert(!$empty->overlaps($oct));
+    assert($oct->intersect($empty) == null);
+
+    // adjacent months share no day either
+    $nov = DateRange(from: Date(2026, .november, 1), until: Date(2026, .december, 1));
+    assert(!$oct->overlaps($nov));
+    assert($oct->intersect($nov) == null);
+
+    // one day of overlap
+    $late = DateRange(from: Date(2026, .october, 31), through: Date(2026, .november, 3));
+    DateRange $one = guard $oct->intersect($late);
+    assert($one->count() == 1);
+    assert($one->start == Date(2026, .october, 31));
+
+    // a range inside another intersects to itself, in either order
+    $week = Date(2026, .october, 14)->span(.week);
+    DateRange $inner = guard $oct->intersect($week);
+    assert($inner == $week);
+    DateRange $flipped = guard $week->intersect($oct);
+    assert($flipped == $week);
+    assert($oct != $week);
+}
+
+test range_steps
+{
+    $r = DateRange(from: Date(2026, .january, 1), until: Date(2026, .february, 1));
+    array<string> $weeks = [];
+    array<usize> $keys = [];
+
+    foreach ($r->every(Period::weeks(1)) as $i => const &$d) {
+        $weeks[] = str::from($d);
+        $keys[] = $i;
+    }
+
+    assert($weeks->count() == 5);
+    assert($weeks[0] == '2026-01-01');
+    assert($weeks[4] == '2026-01-29');
+    assert($keys[0] == 0);
+    assert($keys[4] == 4);
+
+    // steps are counted from the start, so a mixed step does not drift either
+    $year = DateRange(from: Date(2026, .january, 31), until: Date(2026, .june, 1));
+    array<string> $mixed = [];
+
+    foreach ($year->every(Period($months: 1, $days: 1)) as const &$d) {
+        $mixed[] = str::from($d);
+    }
+
+    assert($mixed->count() == 4);
+    assert($mixed[1] == '2026-03-01');
+    assert($mixed[2] == '2026-04-02');
+    assert($mixed[3] == '2026-05-03');
+
+    // yearly steps from a leap day
+    $leap = DateRange(from: Date(2024, .february, 29), until: Date(2029, .january, 1));
+    array<string> $years = [];
+
+    foreach ($leap->every(Period::years(1)) as const &$d) {
+        $years[] = str::from($d);
+    }
+
+    assert($years->count() == 5);
+    assert($years[1] == '2025-02-28');
+    assert($years[4] == '2028-02-29');
+
+    // a step longer than the range gives the start alone
+    int32 $count = 0;
+
+    foreach ($r->every(Period::years(1)) as const &$d) {
+        $count++;
+    }
+
+    assert($count == 1);
+}
+
+test range_iterates_near_the_end_of_time
+{
+    // the last day the library has can start a range but not end an inclusive one
+    $r = DateRange(from: Date(9999, .december, 30), until: Date(9999, .december, 31));
+    int32 $count = 0;
+
+    foreach ($r as const &$d) {
+        $count++;
+    }
+
+    assert($count == 1);
+
+    // a monthly step that would leave the range stops instead
+    $tail = DateRange(from: Date(9999, .october, 31), until: Date::max());
+    array<string> $months = [];
+
+    foreach ($tail->every(Period::months(1)) as const &$d) {
+        $months[] = str::from($d);
+    }
+
+    assert($months->count() == 2);
+    assert($months[1] == '9999-11-30');
+
+    // a step past the year 9999 ends the walk instead of stopping the program
+    int32 $yearly = 0;
+
+    foreach ($tail->every(Period::years(1)) as const &$d) {
+        $yearly++;
+    }
+
+    assert($yearly == 1);
+}
+
+test range_spans_of_every_unit
+{
+    $d = Date(2026, .may, 5);
+    assert($d->span(.quarter) == DateRange(from: Date(2026, .april, 1), through: Date(2026, .june, 30)));
+    assert($d->span(.year)->count() == 365);
+    assert($d->span(.week, WeekRule(.sunday, 1))->start == Date(2026, .may, 3));
+    assert($d->span(.hour) == DateRange(from: $d, through: $d));
+    assert(str::from($d->span(.month)) == '[2026-05-01, 2026-06-01)');
 }

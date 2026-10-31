@@ -68,21 +68,31 @@ internal struct Scanner
 
     /**
      * Consume the longest of `$names` that is next, ignoring ASCII case, and return its index.
-     * Null when none is.
+     * Null when none is, and when two entries tie for it: a name that means two things is
+     * not read as either.
      */
     internal function name(const array<string>& $names) : int64?
     {
         int64 $best = -1;
         usize $length = 0;
+        bool $tied = false;
 
         foreach ($names as $i => const &$name) {
-            if ($name->size() > $length && $this->sees($name)) {
-                $best = $i as int64;
-                $length = $name->size();
+            if ($name->size() < $length || $name->empty() || !$this->sees($name)) {
+                continue;
             }
+
+            if ($name->size() == $length) {
+                $tied = true;
+                continue;
+            }
+
+            $best = $i as int64;
+            $length = $name->size();
+            $tied = false;
         }
 
-        if ($best < 0) {
+        if ($best < 0 || $tied) {
             return null;
         }
 
@@ -97,26 +107,32 @@ internal struct Scanner
     internal function digits(int32 $min, int32 $max) : int64?
     {
         usize $start = $this->at;
-        int64 $value = 0;
-        int32 $count = 0;
+        usize $end = $start + ($max as usize);
+        usize $size = $this->text->size();
 
-        while ($count < $max && !$this->done()) {
-            uint8 $c = $this->peek();
+        if ($end > $size) {
+            $end = $size;
+        }
+
+        int64 $value = 0;
+        usize $i = $start;
+
+        while ($i < $end) {
+            uint8 $c = $this->text->byte($i);
 
             if ($c < 48 || $c > 57) {
                 break;
             }
 
             $value = $value * 10 + (($c - 48) as int64);
-            $this->at = $this->at + 1;
-            $count++;
+            $i++;
         }
 
-        if ($count < $min) {
-            $this->at = $start;
+        if ($i - $start < ($min as usize)) {
             return null;
         }
 
+        $this->at = $i;
         return $value;
     }
 

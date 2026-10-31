@@ -1,0 +1,60 @@
+/*
+ * calendar's docs, built by ecodoc. From the repo root, `ecodoc build`
+ * writes the site to docs/dist.
+ */
+
+#[module: "docs"]
+
+#[docs::title: "calendar"]
+#[docs::description: "Dates, times and time zones for Echo. Strict where it matters, forgiving where you ask."]
+#[docs::repo: "https://github.com/echopack/calendar"]
+#[docs::edit: "https://github.com/echopack/calendar/edit/main/docs/{path}"]
+#[docs::source: "https://github.com/echopack/calendar/blob/main/"]
+#[docs::url: "https://echopack.github.io/calendar"]
+#[docs::nav: [
+    { text: "Guide", link: "/guide/" },
+    { text: "API", link: "/api/" },
+    { text: "Echo", link: "https://echoc.dev" }
+]]
+#[docs::sidebar: [{ base: "/guide/", items: [
+    { text: "Start", items: [
+        { text: "Getting started", link: "/guide/" },
+        { text: "Choosing a type", link: "/guide/types" },
+        { text: "The Calendar", link: "/guide/calendar" }
+    ] },
+    { text: "Values", items: [
+        { text: "Dates", link: "/guide/dates" },
+        { text: "Times and date-times", link: "/guide/times" }
+    ] },
+    { text: "Arithmetic", items: [
+        { text: "Periods and durations", link: "/guide/periods" },
+        { text: "Differences", link: "/guide/differences" },
+        { text: "Units and rounding", link: "/guide/units" }
+    ] },
+    { text: "Time zones", items: [
+        { text: "Zoned date-times", link: "/guide/zoned" },
+        { text: "Daylight saving time", link: "/guide/dst" },
+        { text: "Zones and tz data", link: "/guide/zones" }
+    ] },
+    { text: "Ranges", items: [
+        { text: "Ranges and intervals", link: "/guide/ranges" }
+    ] },
+    { text: "Text", items: [
+        { text: "Formatting", link: "/guide/formatting" },
+        { text: "Parsing", link: "/guide/parsing" },
+        { text: "Locales", link: "/guide/locales" },
+        { text: "Human-readable output", link: "/guide/human" }
+    ] },
+    { text: "Testing", items: [
+        { text: "Clocks", link: "/guide/clocks" }
+    ] },
+    { text: "Reference", items: [
+        { text: "Pattern letters", link: "/guide/patterns" },
+        { text: "Errors", link: "/guide/errors" }
+    ] },
+    { text: "Project", items: [
+        { text: "What isn't here", link: "/guide/limits" }
+    ] }
+] }]]
+#[docs::api: { manifest: "../module.eco", visibility: public, autolink: true }]
+#[docs::footer: { message: "MIT. Built with ecodoc." }]

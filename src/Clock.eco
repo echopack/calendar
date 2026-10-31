@@ -8,5 +8,8 @@ use std::time;
  */
 public interface Clock
 {
+    /**
+     * The current instant, as this clock sees it.
+     */
     const function now() : time::timestamp;
 }

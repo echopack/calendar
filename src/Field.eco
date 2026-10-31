@@ -6,21 +6,84 @@ namespace calendar;
  */
 public enum Field
 {
+    /**
+     * The era: AD from year 1 on, BC before it.
+     */
     case era;
+
+    /**
+     * The calendar year.
+     */
     case year;
+
+    /**
+     * The year a week belongs to. Near New Year it can differ from the calendar year.
+     */
     case weekYear;
+
+    /**
+     * The quarter of the year, 1 to 4.
+     */
     case quarter;
+
+    /**
+     * The month of the year.
+     */
     case month;
+
+    /**
+     * The week number within the week year.
+     */
     case week;
+
+    /**
+     * The day of the month.
+     */
     case day;
+
+    /**
+     * The day of the year, 1 to 366.
+     */
     case dayOfYear;
+
+    /**
+     * The day of the week.
+     */
     case weekday;
+
+    /**
+     * AM or PM, which a 12-hour clock needs to name the hour.
+     */
     case dayPeriod;
+
+    /**
+     * The hour of the day.
+     */
     case hour;
+
+    /**
+     * The minute of the hour.
+     */
     case minute;
+
+    /**
+     * The second of the minute.
+     */
     case second;
+
+    /**
+     * The fraction of a second, in nanoseconds.
+     */
     case nanosecond;
+
+    /**
+     * The offset from UTC, `+01:00`.
+     */
     case offset;
+
+    /**
+     * The time zone, by id or abbreviation.
+     */
     case zone;
 
     /**

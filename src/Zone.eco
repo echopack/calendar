@@ -1,5 +1,6 @@
 namespace calendar;
 
+use std::math;
 use std::time;
 
 /**
@@ -8,22 +9,143 @@ use std::time;
  * Named zones (`Europe/Zurich`) come from a `ZoneSource` and follow the IANA history,
  * including the future rule for years past the last listed change. A fixed zone holds one
  * offset forever. Zones are shared, read-only objects; compare them by `$id`.
+ *
+ * ```echo
+ * $zurich = Zone(named: 'Europe/Zurich');
+ * $friday = DateTime(2026, .march, 27, 9, 30)->at($zurich);
+ * echo $zurich->abbreviation($friday->instant);                           // CET
+ * echo $zurich->candidates(DateTime(2026, .march, 29, 2, 30))->count();   // 0
+ * echo $zurich->candidates(DateTime(2026, .october, 25, 2, 30))->count(); // 2
+ * ```
+ *
+ * On the last Sunday of March, 02:30 never happens in Zurich; on the last Sunday of October
+ * it happens twice. `DateTime::at` and `DateTime::resolve` decide what such a wall clock
+ * means.
  */
+#[atomic]
+#[docs::see: ["ZoneSource", "SystemZones", "Offset", "Zoned"]]
 public class Zone
 {
+    /**
+     * The zone's name: the IANA id for a named zone (`Europe/Zurich`), the offset text for a
+     * fixed one (`+05:30`), `UTC` for `Zone::utc()`. `Zoned`'s `==` compares zones by it.
+     */
     public const string $id;
     private array<int64> $times;
     private array<int32> $kinds;
     private array<ZoneType> $types;
     private PosixRule? $rule;
 
+    // the offset each transition starts, so a lookup reads an int instead of a ZoneType
+    private array<int32> $offsets;
+    // the offset before the first transition
+    private int32 $initial;
+
+    // for each 2^25 seconds (about 388 days) from $bucketBase, the transition in force at its
+    // start: a lookup is a shift and a short forward scan instead of a binary search
+    private array<int32> $buckets;
+    private int64 $bucketBase;
+
+    // per transition, the wall clock readings it skips or repeats: [start, end), empty when
+    // the offset does not change. Wall clock readings are seconds as if the clock were UTC
+    private array<int64> $wallStarts;
+    private array<int64> $wallEnds;
+
     internal constructor(string $id, array<int64> $times, array<int32> $kinds, array<ZoneType> $types, PosixRule? $rule)
     {
+        // write the rule's transitions out up to 2100, so the common lookup is one binary
+        // search; the rule itself only answers past the table
+        if ($rule != null && !$times->empty()) {
+            PosixRule $r = guard $rule;
+            int32 $standard = $types->count() as int32;
+            $types[] = $r->standard;
+            $types[] = $r->daylight;
+
+            // from the last listed change on, the rule decides
+            usize $n = $times->count();
+            int64 $at = $times[$n - 1];
+            $kinds[$n - 1] = Zone::ruleKind($r, $at, $standard);
+
+            while (true) {
+                int64 $next = guard $r->next($at) else {
+                    break;
+                };
+
+                if ($next > FAT_UNTIL) {
+                    break;
+                }
+
+                $times[] = $next;
+                $kinds[] = Zone::ruleKind($r, $next, $standard);
+                $at = $next;
+            }
+        }
+
+        array<int32> $offsets = [];
+        $offsets->reserve($kinds->count());
+
+        foreach ($kinds as const &$k) {
+            $offsets[] = $types[$k as usize]->offset;
+        }
+
+        array<int32> $buckets = [];
+        int64 $base = 0;
+
+        if (!$times->empty()) {
+            usize $n = $times->count();
+            $base = math::max($times[0], INDEX_FROM);
+
+            if ($times[$n - 1] > $base) {
+                int64 $count = (($times[$n - 1] - $base) >> BUCKET_BITS) + 1;
+                $buckets->reserve($count as usize);
+                usize $i = 0;
+
+                for (int64 $b = 0; $b < $count; $b = $b + 1) {
+                    int64 $start = $base + ($b << BUCKET_BITS);
+
+                    while ($i + 1 < $n && $times[$i + 1] <= $start) {
+                        $i++;
+                    }
+
+                    $buckets[] = $i as int32;
+                }
+            }
+        }
+
+        array<int64> $wallStarts = [];
+        array<int64> $wallEnds = [];
+        $wallStarts->reserve($times->count());
+        $wallEnds->reserve($times->count());
+        int32 $previous = $types[0]->offset;
+
+        for (usize $i = 0; $i < $times->count(); $i++) {
+            int32 $current = $offsets[$i];
+            $wallStarts[] = $times[$i] + (math::min($previous, $current) as int64);
+            $wallEnds[] = $times[$i] + (math::max($previous, $current) as int64);
+            $previous = $current;
+        }
+
         $this->id = $id;
+        $this->initial = $types[0]->offset;
+        $this->wallStarts = mv $wallStarts;
+        $this->wallEnds = mv $wallEnds;
+        $this->buckets = mv $buckets;
+        $this->bucketBase = $base;
         $this->times = mv $times;
         $this->kinds = mv $kinds;
         $this->types = mv $types;
+        $this->offsets = mv $offsets;
         $this->rule = $rule;
+    }
+
+    // the index into types of the rule's type at $secs, given where its two types start
+    private static function ruleKind(const PosixRule& $r, int64 $secs, int32 $standard) : int32
+    {
+        if ($r->at($secs)->dst) {
+            return $standard + 1;
+        }
+
+        return $standard;
     }
 
     /**
@@ -36,6 +158,12 @@ public class Zone
         $this->kinds = [];
         $this->types = [ZoneType($offset->seconds, false, str::from($offset))];
         $this->rule = null;
+        $this->offsets = [];
+        $this->initial = $offset->seconds;
+        $this->buckets = [];
+        $this->bucketBase = 0;
+        $this->wallStarts = [];
+        $this->wallEnds = [];
     }
 
     /**
@@ -54,6 +182,12 @@ public class Zone
         $this->kinds = $z->kinds;
         $this->types = $z->types;
         $this->rule = $z->rule;
+        $this->offsets = $z->offsets;
+        $this->initial = $z->initial;
+        $this->buckets = $z->buckets;
+        $this->bucketBase = $z->bucketBase;
+        $this->wallStarts = $z->wallStarts;
+        $this->wallEnds = $z->wallEnds;
     }
 
     internal static Zone $utcZone = Zone('UTC', [], [], [ZoneType(0, false, 'UTC')], null);
@@ -67,14 +201,18 @@ public class Zone
         return Zone::$system;
     }
 
+    /**
+     * UTC, offset zero forever, without reading any zone file. Its id is `UTC`; a fixed
+     * `Zone(offset: Offset::utc())` is `+00:00`.
+     */
     public static function utc() : Zone
     {
         return Zone::$utcZone;
     }
 
     /**
-     * A named zone from the operating system's zone files. Use a `Calendar` with its own
-     * `ZoneSource` to read from anywhere else.
+     * A named zone from the operating system's zone files, `Zone::system()`. Use a `Calendar`
+     * with its own `ZoneSource` to read from anywhere else.
      */
     public static function named(const string& $id) : result<Zone, ZoneError>
     {
@@ -82,8 +220,15 @@ public class Zone
     }
 
     /**
-     * The zone this machine runs in: `$TZ` when set (a name, or a path to a zone file), then
-     * the zone `/etc/localtime` points at, then UTC.
+     * The zone this machine runs in, the default for a `Calendar`.
+     *
+     * `$TZ` comes first when it is set, with a leading `:` stripped: an absolute path to a
+     * zone file, a zone name, or a POSIX rule string such as `CET-1CEST,M3.5.0,M10.5.0/3`. An
+     * empty or unusable `$TZ` gives UTC. Without `$TZ`, the zone `/etc/localtime` points at,
+     * and UTC when that cannot be read. Never fails.
+     *
+     * A zone file found under a `zoneinfo` directory takes its name from the path; one that
+     * is not is named `localtime`. A POSIX rule is named after the rule text.
      */
     public static function local() : Zone
     {
@@ -165,7 +310,16 @@ public class Zone
      */
     public const function fixed() : bool
     {
-        return $this->times->empty() && $this->types->count() == 1 && $this->rule == null;
+        if (!$this->times->empty() || $this->types->count() != 1) {
+            return false;
+        }
+
+        PosixRule $r = guard $this->rule else {
+            return true;
+        };
+
+        // a rule without daylight saving time is one offset forever
+        return !$r->hasDst && $r->standard->offset == $this->initial;
     }
 
     /**
@@ -173,7 +327,7 @@ public class Zone
      */
     public const function offset(const time::timestamp& $at) : Offset
     {
-        return Offset($this->type($at->unix_secs())->offset);
+        return Offset($this->offsetAt($at->unix_secs()));
     }
 
     /**
@@ -232,6 +386,92 @@ public class Zone
     public const function candidates(const DateTime& $local) : array<Offset>
     {
         int64 $wall = $local->wall();
+        WallOffsets $w = $this->local($wall);
+
+        array<Offset> $out = [];
+
+        if ($w->kind == WallKind::single) {
+            $out[] = Offset($w->before);
+        } else if ($w->kind == WallKind::fold) {
+            // a larger offset is an earlier instant for the same wall clock
+            $out[] = Offset($w->before);
+            $out[] = Offset($w->after);
+        } else if ($w->kind == WallKind::scan) {
+            return $this->scan($wall);
+        }
+
+        return $out;
+    }
+
+    /**
+     * The offsets the wall clock reading `$wall` can have here, from the table, without
+     * allocating. Past the table, where the rule answers, the kind is `scan`.
+     */
+    internal const function local(int64 $wall) : WallOffsets
+    {
+        usize $n = $this->times->count();
+
+        if ($n == 0) {
+            if ($this->rule != null) {
+                return WallOffsets(.scan, 0, 0);
+            }
+
+            return WallOffsets(.single, $this->initial, $this->initial);
+        }
+
+        if ($wall < $this->wallStarts[0]) {
+            return WallOffsets(.single, $this->initial, $this->initial);
+        }
+
+        // a transition's skipped or repeated readings start within 26 hours of it, so start
+        // from the one in force a day and a bit before and walk forward
+        usize $i = 0;
+        int64 $early = $wall - 93600;
+
+        if ($early >= $this->times[0]) {
+            if ($early >= $this->times[$n - 1]) {
+                $i = $n - 1;
+            } else {
+                $i = $this->index($early);
+            }
+        }
+
+        while ($i + 1 < $n && $this->wallStarts[$i + 1] <= $wall) {
+            $i++;
+        }
+
+        if ($i + 1 == $n && $this->rule != null) {
+            return WallOffsets(.scan, 0, 0);
+        }
+
+        // two changes close enough that their readings overlap: let the scan sort it out
+        if ($i > 0 && $wall < $this->wallEnds[$i - 1]) {
+            return WallOffsets(.scan, 0, 0);
+        }
+
+        int32 $after = $this->offsets[$i];
+
+        if ($wall < $this->wallEnds[$i]) {
+            int32 $before = $this->initial;
+
+            if ($i > 0) {
+                $before = $this->offsets[$i - 1];
+            }
+
+            if ($before < $after) {
+                return WallOffsets(.gap, $before, $after);
+            }
+
+            return WallOffsets(.fold, $before, $after);
+        }
+
+        return WallOffsets(.single, $after, $after);
+    }
+
+    // the offsets for a wall clock reading worked out from the transitions around it, the
+    // way that also works past the table
+    private const function scan(int64 $wall) : array<Offset>
+    {
         int64 $limit = $wall + 108000;
         int64 $at = $wall - 108000;
         array<int32> $seen = [$this->type($at)->offset];
@@ -307,6 +547,64 @@ public class Zone
         }
 
         return $this->types[$this->kinds[$lo] as usize];
+    }
+
+    /**
+     * The offset in seconds in force at Unix second `$secs`. The same answer as
+     * `type($secs)->offset`, without building the type.
+     */
+    internal const function offsetAt(int64 $secs) : int32
+    {
+        usize $n = $this->times->count();
+
+        if ($n == 0 || $secs >= $this->times[$n - 1]) {
+            if ($this->rule != null) {
+                PosixRule $r = guard $this->rule;
+                return $r->at($secs)->offset;
+            }
+
+            if ($n == 0) {
+                return $this->initial;
+            }
+
+            return $this->offsets[$n - 1];
+        }
+
+        if ($secs < $this->times[0]) {
+            return $this->initial;
+        }
+
+        return $this->offsets[$this->index($secs)];
+    }
+
+    // the last transition at or before $secs, for $secs from the first transition up to
+    // (not including) the last
+    private const function index(int64 $secs) : usize
+    {
+        if ($secs >= $this->bucketBase) {
+            usize $i = $this->buckets[(($secs - $this->bucketBase) >> BUCKET_BITS) as usize] as usize;
+
+            while ($this->times[$i + 1] <= $secs) {
+                $i++;
+            }
+
+            return $i;
+        }
+
+        usize $lo = 0;
+        usize $hi = $this->times->count() - 1;
+
+        while ($lo < $hi) {
+            usize $mid = $lo + ($hi - $lo + 1) / 2;
+
+            if ($this->times[$mid] <= $secs) {
+                $lo = $mid;
+            } else {
+                $hi = $mid - 1;
+            }
+        }
+
+        return $lo;
     }
 
     internal const function nextSecs(int64 $after) : int64?

@@ -14,6 +14,27 @@ internal const int64 MAX_YEAR = 9999;
 internal const int64 MIN_DAY = -4371587;
 internal const int64 MAX_DAY = 2932896;
 
+// 9999-12-31T23:59:59Z, the last Unix second a zone can matter for
+internal const int64 LAST_SECOND = 253402300799;
+
+// the widest offset from UTC, 25:59:59 either way
+internal const int32 MAX_OFFSET = 93599;
+
+// Neri and Schneider shift every year by 82 eras of 400 years so the day maths runs unsigned
+internal const int64 SHIFT_YEARS = 32800;
+internal const int64 SHIFT_DAYS = 12699422;
+
+// 2101-01-01T00:00:00Z: zone rules are written out as transitions up to here
+internal const int64 FAT_UNTIL = 4133980800;
+
+// zone lookups index transitions in buckets of 2^25 seconds, from 1833 on at the earliest
+internal const int64 BUCKET_BITS = 25;
+internal const int64 INDEX_FROM = -4294967296;
+
+// the widest move that can still land inside the range
+internal const int64 LIMIT_MONTHS = 240000;
+internal const int64 LIMIT_DAYS = 7304484;
+
 internal const int64 SECS_PER_MINUTE = 60;
 internal const int64 SECS_PER_HOUR = 3600;
 internal const int64 SECS_PER_DAY = 86400;

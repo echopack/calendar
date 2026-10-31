@@ -1,0 +1,147 @@
+use calendar::{Locale, Date, Month, Weekday, WeekRule, Unit, Plural, Period, Format, Relative};
+
+test locale_of_tags
+{
+    array<string> $german = ['de', 'DE', 'de-CH', 'de_AT', 'De-de'];
+
+    foreach ($german as const &$tag) {
+        Locale $l = guard Locale::of($tag);
+        assert($l->id == 'de');
+    }
+
+    Locale $fr = guard Locale::of('fr-CH');
+    assert($fr->id == 'fr');
+    Locale $it = guard Locale::of('it_CH');
+    assert($it->id == 'it');
+
+    // English counts its weeks the American way only in the United States
+    Locale $us = guard Locale::of('en-US');
+    assert($us->weekRule->firstDay == Weekday::sunday);
+    Locale $plain = guard Locale::of('en');
+    assert($plain->weekRule->firstDay == Weekday::sunday);
+    Locale $lower = guard Locale::of('en_us');
+    assert($lower->weekRule->firstDay == Weekday::sunday);
+    Locale $ch = guard Locale::of('en-CH');
+    assert($ch->weekRule->firstDay == Weekday::monday);
+    assert($ch->weekRule->minimalDays == 4);
+
+    assert(Locale::of('') == null);
+    assert(Locale::of('e') == null);
+    assert(Locale::of('english') == null);
+    assert(Locale::of('es') == null);
+    assert(Locale::of('nl-NL') == null);
+}
+
+test locale_names
+{
+    assert(Locale::en()->month(.september) == 'September');
+    assert(Locale::en()->month(.september, true) == 'Sep');
+    assert(Locale::de()->month(.march) == 'März');
+    assert(Locale::fr()->month(.february, true) == 'févr.');
+    assert(Locale::it()->month(.june) == 'giugno');
+    assert(Locale::en()->weekday(.thursday) == 'Thursday');
+    assert(Locale::en()->weekday(.thursday, true) == 'Thu');
+    assert(Locale::de()->weekday(.sunday) == 'Sonntag');
+    assert(Locale::fr()->weekday(.monday) == 'lundi');
+    assert(Locale::it()->weekday(.friday) == 'venerdì');
+}
+
+test locale_week_rules
+{
+    assert(Locale::en()->weekRule->firstDay == Weekday::sunday);
+    assert(Locale::en()->weekRule->minimalDays == 1);
+    assert(Locale::de()->weekRule->firstDay == Weekday::monday);
+    assert(Locale::de()->weekRule->minimalDays == 4);
+    assert(Locale::fr()->weekRule->firstDay == Weekday::monday);
+    assert(Locale::it()->weekRule->firstDay == Weekday::monday);
+}
+
+test locale_counts
+{
+    assert(Locale::en()->count(1, .day) == '1 day');
+    assert(Locale::en()->count(0, .day) == '0 days');
+    assert(Locale::en()->count(-1, .day) == '-1 day');
+    assert(Locale::en()->count(2, .week) == '2 weeks');
+    assert(Locale::de()->count(1, .hour) == '1 Stunde');
+    assert(Locale::de()->count(3, .year) == '3 Jahre');
+    assert(Locale::fr()->count(0, .day) == '0 jour');
+    assert(Locale::fr()->count(2, .month) == '2 mois');
+    assert(Locale::it()->count(1, .minute) == '1 minuto');
+    assert(Locale::it()->count(5, .second) == '5 secondi');
+}
+
+test locale_counts_quarters_as_months
+{
+    // a quarter has no word of its own; two of them are six months
+    assert(Locale::en()->count(2, .quarter) == '6 months');
+    assert(Locale::de()->count(1, .quarter) == '3 Monate');
+    assert(Locale::en()->relative(-2, .quarter) == '6 months ago');
+    assert(Locale::it()->relative(1, .quarter) == 'tra 3 mesi');
+
+    // below a second, whole seconds
+    assert(Locale::en()->count(1500, .millisecond) == '1 second');
+    assert(Locale::en()->count(2000000, .microsecond) == '2 seconds');
+    assert(Locale::en()->relative(-3000000000, .nanosecond) == '3 seconds ago');
+}
+
+test locale_relative_phrases
+{
+    assert(Locale::en()->relative(1, .day) == 'in 1 day');
+    assert(Locale::en()->relative(-1, .day) == '1 day ago');
+    assert(Locale::en()->relative(0, .second) == 'in 0 seconds');
+    assert(Locale::en()->relative(-5, .year) == '5 years ago');
+    assert(Locale::de()->relative(-1, .month) == 'vor 1 Monat');
+    assert(Locale::de()->relative(4, .week) == 'in 4 Wochen');
+    assert(Locale::fr()->relative(-1, .hour) == 'il y a 1 heure');
+    assert(Locale::fr()->relative(0, .minute) == 'dans 0 minute');
+    assert(Locale::it()->relative(-2, .day) == '2 giorni fa');
+    assert(Locale::it()->relative(1, .year) == 'tra 1 anno');
+}
+
+test locale_built_by_hand
+{
+    // a made-up language from the English words, with its own names for the months
+    $en = Locale::en();
+    array<string> $months = ['Ja', 'Fe', 'Mr', 'Ap', 'My', 'Jn', 'Jl', 'Au', 'Se', 'Oc', 'No', 'De'];
+    $custom = Locale(
+        $id: 'xx',
+        $months: $months,
+        $monthsShort: $en->monthsShort,
+        $monthsStandaloneShort: $en->monthsStandaloneShort,
+        $monthsNarrow: $en->monthsNarrow,
+        $weekdays: $en->weekdays,
+        $weekdaysShort: $en->weekdaysShort,
+        $weekdaysNarrow: $en->weekdaysNarrow,
+        $quarters: $en->quarters,
+        $quartersShort: $en->quartersShort,
+        $eras: $en->eras,
+        $erasWide: $en->erasWide,
+        $dayPeriods: $en->dayPeriods,
+        $weekRule: WeekRule(.saturday, 1),
+        $plural: .zeroAndOne,
+        $units: $en->units,
+        $relative: $en->relative,
+        $nearDays: $en->nearDays,
+        $now: 'right now',
+        $and: '&',
+    );
+
+    $d = Date(2026, .october, 28);
+    assert($d->format('d MMMM yyyy', $custom) == '28 Oc 2026');
+    Date $back = guard Date::parse('28 Oc 2026', Format('d MMMM yyyy')->locale($custom));
+    assert($back == $d);
+    assert(Period($days: 1, $hours: 2)->human($custom) == '1 day & 2 hours');
+    assert($custom->count(0, .day) == '0 day');
+    assert(Relative()->render($d, $d, $custom) == 'today');
+}
+
+test period_human_lists
+{
+    assert(Period::days(2)->human() == '2 days');
+    assert(Period($days: 2, $hours: 3)->human() == '2 days and 3 hours');
+    assert(Period($years: 1, $months: 2, $weeks: 3, $days: 4, $hours: 5, $minutes: 6, $seconds: 7)->human() == '1 year, 2 months, 3 weeks, 4 days, 5 hours, 6 minutes and 7 seconds');
+    assert(Period($minutes: 1, $nanoseconds: 5)->human() == '1 minute');
+    assert(Period::nanoseconds(5)->human() == '0 seconds');
+    assert(Period($years: 1, $days: 2)->human(Locale::it()) == '1 anno e 2 giorni');
+    assert(Period($months: 1, $days: 1)->human(Locale::fr()) == '1 mois et 1 jour');
+}

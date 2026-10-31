@@ -1,25 +1,40 @@
 namespace calendar;
 
 /**
- * A fixed distance from UTC, in seconds east. Zurich in winter is `+01:00`, New York in
- * summer `-04:00`. Limited to plus or minus 25:59:59.
+ * A fixed distance from UTC, in seconds east.
+ *
+ * Zurich in winter is `+01:00`, New York in summer `-04:00`. Limited to plus or minus
+ * 25:59:59. Interpolated, an offset prints as `+01:00`, with seconds only when it has some.
  */
 public struct Offset : contract::comparable<Offset>
 {
+    /**
+     * Seconds east of UTC; negative west of it.
+     */
     public const int32 $seconds;
 
+    /**
+     * An offset of `$seconds` east of UTC. Past 25:59:59 either way stops the program.
+     */
     constructor(int32 $seconds)
     {
         if ($seconds < -93599 || $seconds > 93599) {
-            die("calendar: an offset of {$seconds} seconds is past 25:59:59");
+            Offset::refuse($seconds);
         }
 
         $this->seconds = $seconds;
     }
 
+    // kept out of line so the constructor stays small enough to inline
+    private static function refuse(int32 $seconds) : void
+    {
+        die("calendar: an offset of {$seconds} seconds is past 25:59:59");
+    }
+
     /**
      * An offset in hours and minutes. The sign of `$hours` applies to the minutes, so
-     * `Offset(hours: -3, 30)` is `-03:30`.
+     * `Offset(hours: -3, $minutes: 30)` is `-03:30`. Past 25:59:59 either way stops the
+     * program.
      */
     constructor(hours: int32 $hours, int32 $minutes = 0)
     {
@@ -36,18 +51,22 @@ public struct Offset : contract::comparable<Offset>
         $this->seconds = $total;
     }
 
+    /**
+     * Zero, `+00:00`.
+     */
     public static function utc() : Offset
     {
         return Offset(0);
     }
 
     /**
-     * Parse `Z`, `+01:00`, `+0100`, `+01` or `+01:00:30`.
+     * Parse `Z`, `+01:00`, `+0100`, `+01`, `+01:00:30` or `+010030`. The hour takes two
+     * digits and at most 25; anything after the offset is `ParseError::trailing`.
      */
     public static function parse(const string& $text) : result<Offset, ParseError>
     {
         Scanner $s = Scanner($text);
-        Offset $o = guard Offset::scan($s) else ($e) {
+        Offset $o = guard Offset::scan($s, true) else ($e) {
             return .error($e);
         };
 
@@ -109,7 +128,8 @@ public struct Offset : contract::comparable<Offset>
         return $out;
     }
 
-    internal static function scan(Scanner& $s) : result<Offset, ParseError>
+    // +hh, +hhmm, +hh:mm or +hh:mm:ss, and +hhmmss when $basicSeconds
+    internal static function scan(Scanner& $s, bool $basicSeconds = false) : result<Offset, ParseError>
     {
         if ($s->eat(90) || $s->eat(122)) {
             return .ok(Offset(0));
@@ -144,6 +164,9 @@ public struct Offset : contract::comparable<Offset>
                     return .error(.expected($secondAt, 'two-digit seconds'));
                 };
                 $seconds = $readSeconds;
+            } else if (!$colon && $basicSeconds) {
+                // +hhmmss, as the X and x letters write an offset with seconds
+                $seconds = $s->digits(2, 2) ?? 0;
             }
         } else if ($colon) {
             return .error(.expected($minuteAt, 'two-digit minutes'));

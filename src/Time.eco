@@ -7,14 +7,44 @@ use std::time;
  *
  * Adding past midnight wraps around: 23:00 plus two hours is 01:00. When the day matters,
  * use a `DateTime`.
+ *
+ * ```echo
+ * $late = Time(23, 30) + time::duration::hours(2);
+ * echo "{$late}";                                  // 01:30:00
+ * $t = Time(9, 47, 31)->round(.minute);
+ * echo "{$t}";                                     // 09:48:00
+ * echo Time(9, 0)->until(Time(17, 30), .minute);   // 510
+ * echo Time(14, 5)->format('h:mm a');              // 2:05 PM
+ * ```
  */
+#[docs::groups: ["Constructors", "Read", "Adjust", "Arithmetic", "Differences", "Convert", "Format"]]
+#[docs::see: ["DateTime", "Date"]]
 public struct Time : contract::comparable<Time>
 {
+    /**
+     * The hour, 0 to 23.
+     */
     public const int32 $hour;
+
+    /**
+     * The minute, 0 to 59.
+     */
     public const int32 $minute;
+
+    /**
+     * The second, 0 to 59. There are no leap seconds.
+     */
     public const int32 $second;
+
+    /**
+     * The fraction of the second in nanoseconds, 0 to 999999999.
+     */
     public const int32 $nanosecond;
 
+    /**
+     * The time for an hour and optional minute, second and nanosecond. A field out of range
+     * stops the program; use `Time::of` for numbers that arrive at runtime.
+     */
     constructor(int32 $hour, int32 $minute = 0, int32 $second = 0, int32 $nanosecond = 0)
     {
         guard Time::check($hour as int64, $minute as int64, $second as int64, $nanosecond as int64);
@@ -26,7 +56,8 @@ public struct Time : contract::comparable<Time>
     }
 
     /**
-     * The time `$nanos` nanoseconds after midnight, 0 up to one day.
+     * The time `$nanos` nanoseconds after midnight. A value below 0 or a full day or more
+     * stops the program.
      */
     constructor(nanos: int64 $nanos)
     {
@@ -40,9 +71,20 @@ public struct Time : contract::comparable<Time>
         $this->nanosecond = ($nanos % NANOS_PER_SEC) as int32;
     }
 
+    // the time $second seconds after midnight plus $nanosecond, both already in range
+    internal constructor(second: int64 $second, int32 $nanosecond)
+    {
+        $this->hour = ($second / SECS_PER_HOUR) as int32;
+        $this->minute = (($second / SECS_PER_MINUTE) % 60) as int32;
+        $this->second = ($second % 60) as int32;
+        $this->nanosecond = $nanosecond;
+    }
+
     /**
-     * A time from runtime numbers, checked.
+     * A time from runtime numbers, checked: a field out of range comes back as a `DateError`
+     * instead of stopping the program.
      */
+    #[docs::group: "Constructors"]
     public static function of(int64 $hour, int64 $minute = 0, int64 $second = 0, int64 $nanosecond = 0) : result<Time, DateError>
     {
         guard Time::check($hour, $minute, $second, $nanosecond) else ($e) {
@@ -52,11 +94,17 @@ public struct Time : contract::comparable<Time>
         return .ok(Time($hour as int32, $minute as int32, $second as int32, $nanosecond as int32));
     }
 
+    /**
+     * 00:00, the start of the day.
+     */
     public static function midnight() : Time
     {
         return Time(0);
     }
 
+    /**
+     * 12:00.
+     */
     public static function noon() : Time
     {
         return Time(12);
@@ -66,6 +114,7 @@ public struct Time : contract::comparable<Time>
      * Parse ISO 8601 `HH:MM`, `HH:MM:SS` or `HH:MM:SS.fffffffff`. A leap second `:60` reads
      * as `:59`; the library has no leap seconds.
      */
+    #[docs::group: "Constructors"]
     public static function parse(const string& $text) : result<Time, ParseError>
     {
         Scanner $s = Scanner($text);
@@ -84,9 +133,11 @@ public struct Time : contract::comparable<Time>
      * Parse with a pattern, `h:mm a`. The hour is required; minutes, seconds and fractions
      * the pattern leaves out are zero.
      */
+    #[docs::group: "Constructors"]
     public static function parse(const string& $text, const Format& $format) : result<Time, ParseError>
     {
-        Fields $f = guard Fields::read($format, $text, Zone::system()) else ($e) {
+        Fields $f = Fields();
+        guard Fields::read($f, $format, $text, null) else ($e) {
             return .error($e);
         };
 
@@ -96,6 +147,7 @@ public struct Time : contract::comparable<Time>
     /**
      * Nanoseconds since midnight.
      */
+    #[docs::group: "Read"]
     public const function nanos() : int64
     {
         return ($this->hour as int64) * NANOS_PER_HOUR + ($this->minute as int64) * NANOS_PER_MINUTE
@@ -105,6 +157,7 @@ public struct Time : contract::comparable<Time>
     /**
      * Move the clock by `$d`, wrapping around midnight in either direction.
      */
+    #[docs::group: "Arithmetic"]
     public const function add(const time::duration& $d) : Time
     {
         int64 $secs = floorMod($d->as_secs(), SECS_PER_DAY);
@@ -112,6 +165,10 @@ public struct Time : contract::comparable<Time>
         return Time(nanos: floorMod($total, NANOS_PER_DAY));
     }
 
+    /**
+     * Move the clock back by `$d`, wrapping around midnight in either direction.
+     */
+    #[docs::group: "Arithmetic"]
     public const function sub(const time::duration& $d) : Time
     {
         return $this->add(-$d);
@@ -121,21 +178,33 @@ public struct Time : contract::comparable<Time>
      * The signed length from this time to `$other` on the same day. 22:00 until 02:00 is
      * minus 20 hours, not plus 4; put both on dates when the day can change.
      */
+    #[docs::group: "Differences"]
     public const function until(const Time& $other) : time::duration
     {
         return time::duration::nanos($other->nanos() - $this->nanos());
     }
 
+    /**
+     * How many whole `$unit`s from this time to `$other` on the same day. The remainder is
+     * dropped toward zero unless `$mode` says otherwise; years, quarters and months stop the
+     * program.
+     */
+    #[docs::group: "Differences"]
     public const function until(const Time& $other, Unit $unit, Rounding $mode = .trunc) : int64
     {
         return $unit->count($this->until($other), $mode);
     }
 
+    /**
+     * The mirror of `until`: the signed length from `$other` to this time on the same day.
+     */
+    #[docs::group: "Differences"]
     public const function since(const Time& $other) : time::duration
     {
         return $other->until($this);
     }
 
+    #[docs::group: "Differences"]
     public const function since(const Time& $other, Unit $unit, Rounding $mode = .trunc) : int64
     {
         return $other->until($this, $unit, $mode);
@@ -143,8 +212,9 @@ public struct Time : contract::comparable<Time>
 
     /**
      * Round to a multiple of `$unit`. A result of 24:00 wraps to midnight. Units of a day and
-     * up are refused.
+     * up stop the program: a clock has no days to round to.
      */
+    #[docs::group: "Adjust"]
     public const function round(Unit $unit, Rounding $mode = .halfExpand) : Time
     {
         int64 $length = Time::clock($unit);
@@ -154,16 +224,19 @@ public struct Time : contract::comparable<Time>
     }
 
     /**
-     * Cut off everything below `$unit`: 14:35:12 at `.hour` is 14:00.
+     * Cut off everything below `$unit`: 14:35:12 at `.hour` is 14:00. Units of a day and up
+     * stop the program, as in `round`.
      */
+    #[docs::group: "Adjust"]
     public const function start(Unit $unit) : Time
     {
         return $this->round($unit, .trunc);
     }
 
     /**
-     * A copy with some fields replaced.
+     * A copy with some fields replaced. A field out of range stops the program.
      */
+    #[docs::group: "Adjust"]
     public const function with(int32? $hour = null, int32? $minute = null, int32? $second = null, int32? $nanosecond = null) : Time
     {
         return Time($hour ?? $this->hour, $minute ?? $this->minute, $second ?? $this->second, $nanosecond ?? $this->nanosecond);
@@ -172,15 +245,17 @@ public struct Time : contract::comparable<Time>
     /**
      * This time on a date.
      */
+    #[docs::group: "Convert"]
     public const function on(const Date& $date) : DateTime
     {
         return DateTime($date, $this);
     }
 
     /**
-     * Render with a pattern, `dd.MM.yyyy`, names in `$locale`. A bad pattern stops the
-     * program; compile runtime patterns with `Format::of` first.
+     * Render with a pattern, `HH:mm`, names in `$locale`. A bad pattern stops the program;
+     * compile runtime patterns with `Format::of` first.
      */
+    #[docs::group: "Format"]
     public const function format(const string& $pattern, Locale $locale = Locale::en()) : string
     {
         return Format($pattern)->locale($locale)->render($this);
@@ -189,6 +264,7 @@ public struct Time : contract::comparable<Time>
     /**
      * Render with a compiled format, in the format's own language.
      */
+    #[docs::group: "Format"]
     public const function format(const Format& $format) : string
     {
         return $format->render($this);

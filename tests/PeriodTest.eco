@@ -37,3 +37,68 @@ test period_arithmetic
     assert(!Period::hours(1)->dated());
     assert(Period::zero()->empty());
 }
+
+test period_mixed_signs_round_trip
+{
+    $p = Period($months: 1, $days: -3, $seconds: -2, $nanoseconds: -500000000);
+    Period $back = guard Period::parse(str::from($p));
+    assert($back == Period($months: 1, $days: -3, $seconds: -2, $nanoseconds: -500000000));
+    assert(Period::parse('-P1M-3D')->failed());
+}
+
+test period_builders_and_checks
+{
+    assert(Period::years(2) == Period($years: 2));
+    assert(Period::minutes(3) == Period($minutes: 3));
+    assert(Period::seconds(4) == Period($seconds: 4));
+    assert(Period::nanoseconds(5) == Period($nanoseconds: 5));
+    assert(!Period::nanoseconds(1)->empty());
+    assert(!Period::nanoseconds(1)->dated());
+    assert(!Period::years(1)->empty());
+    assert(Period::years(1)->dated());
+    assert((Period::days(3) - Period::days(3))->empty());
+    assert(Period::weeks(2) * 0 == Period::zero());
+    assert(Period($hours: -1, $minutes: 30)->exact() == time::duration::mins(-30));
+    assert(Period::zero()->exact()->is_zero());
+    assert(Period($days: 1, $hours: 2) - Period::hours(3) == Period($days: 1, $hours: -1));
+}
+
+test period_text_more
+{
+    assert(str::from(Period::nanoseconds(1)) == 'PT0.000000001S');
+    assert(str::from(Period::nanoseconds(-1500000000)) == '-PT1.500S');
+    assert(str::from(Period($seconds: 1, $nanoseconds: -500000000)) == 'PT0.500S');
+    assert(str::from(Period($days: 1, $nanoseconds: -1)) == 'P1DT-0.000000001S');
+    assert(str::from(Period::hours(100)) == 'PT100H');
+    assert(str::from(Period($years: -1, $hours: -2)) == '-P1YT2H');
+    assert(str::from(Period($hours: -1, $minutes: 30)) == 'PT-1H30M');
+    assert(str::from(Period($weeks: 1, $days: 1)) == 'P1W1D');
+}
+
+test period_parse_more
+{
+    Period $lower = guard Period::parse('p1y2m3dt4h5m6s');
+    assert($lower == Period($years: 1, $months: 2, $days: 3, $hours: 4, $minutes: 5, $seconds: 6));
+    Period $plus = guard Period::parse('+P1D');
+    assert($plus == Period::days(1));
+    Period $comma = guard Period::parse('PT1,25S');
+    assert($comma == Period($seconds: 1, $nanoseconds: 250000000));
+    Period $negativeFraction = guard Period::parse('-PT0.5S');
+    assert($negativeFraction == Period::nanoseconds(-500000000));
+    Period $field = guard Period::parse('PT-1H30M');
+    assert($field == Period($hours: -1, $minutes: 30));
+    Period $big = guard Period::parse('P999999999999999999D');
+    assert($big->days == 999999999999999999);
+
+    assert(str::from(Period::parse('P1H')->failure()) == 'expected a unit designator in order at byte 2');
+    assert(str::from(Period::parse('PT1D')->failure()) == 'expected a unit designator in order at byte 3');
+    assert(str::from(Period::parse('PT1.5M')->failure()) == 'expected a fraction only on seconds at byte 2');
+    assert(str::from(Period::parse('P1DT')->failure()) == 'expected a clock field after T at byte 4');
+    assert(str::from(Period::parse('P1Y1Y')->failure()) == 'expected a unit designator in order at byte 4');
+    assert(str::from(Period::parse('PD')->failure()) == 'expected a number at byte 1');
+    assert(str::from(Period::parse('P1')->failure()) == 'expected a unit designator in order at byte 2');
+    assert(str::from(Period::parse('-P-1D')->failure()) == 'expected no field sign after a leading one at byte 2');
+    assert(Period::parse('P1DT1HT1M')->failed());
+    assert(Period::parse('P9999999999999999999D')->failed());
+    assert(Period::parse('')->failed());
+}

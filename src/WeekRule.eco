@@ -9,9 +9,20 @@ namespace calendar;
  */
 public struct WeekRule
 {
+    /**
+     * The day each week starts on.
+     */
     public const Weekday $firstDay;
+
+    /**
+     * How many days of the new year week 1 needs, 1 to 7.
+     */
     public const int32 $minimalDays;
 
+    /**
+     * A rule from a first day and a minimal day count. `WeekRule(.sunday, 1)` is the US rule:
+     * week 1 is the week that holds January 1. A count outside 1 to 7 stops the program.
+     */
     constructor(Weekday $firstDay, int32 $minimalDays)
     {
         if ($minimalDays < 1 || $minimalDays > 7) {

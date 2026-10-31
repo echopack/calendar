@@ -28,11 +28,33 @@ internal struct Fields
     internal usize $offsetAt = 0;
     internal Zone? $zone = null;
 
-    internal static function read(const Format& $format, const string& $text, ZoneSource $zones) : result<Fields, ParseError>
+    /**
+     * Read `$text` with `$format` into `$f`, which starts empty. Zone names come from
+     * `$zones`, or from the system's zones when that is null; it is only asked when the
+     * pattern has a zone name in it.
+     */
+    internal static function read(Fields& $f, const Format& $format, const string& $text, ZoneSource? $zones) : status<ParseError>
     {
-        Fields $f = Fields();
+        if ($format->protocol == Protocol::rfc3339) {
+            Fields $stamped = guard Fields::stamp($text) else ($e) {
+                return .error($e);
+            };
+
+            $f = $stamped;
+            return .ok;
+        }
+
+        if ($format->protocol == Protocol::rfc2822 || $format->protocol == Protocol::http) {
+            Fields $mailed = guard Rfc2822::read($text) else ($e) {
+                return .error($e);
+            };
+
+            $f = $mailed;
+            return .ok;
+        }
+
         Scanner $s = Scanner($text);
-        Locale $names = $format->names;
+        const Locale& $names = $format->names;
 
         foreach ($format->tokens as const &$t) {
             usize $at = $s->at;
@@ -40,12 +62,17 @@ internal struct Fields
             int32 $n = $t->count;
 
             if ($l == Letter::text) {
-                if ($at + $t->text->size() > $text->size() || !$text->sub($at, $t->text->size())->equals($t->text)) {
+                if (!Fields::literal($text, $at, $t->text)) {
                     return .error(.expected($at, "'{$t->text}'"));
                 }
 
                 $s->at = $at + $t->text->size();
                 continue;
+            }
+
+            // J is January, June and July; a narrow name cannot be read back
+            if ($n == 5 && ($l == Letter::month || $l == Letter::monthAlone || $l == Letter::weekday || $l == Letter::localWeekday || $l == Letter::localWeekdayAlone)) {
+                return .error(.expected($at, "a pattern without narrow names; 'MMMMM' and 'EEEEE' cannot be read back"));
             }
 
             if ($l == Letter::era) {
@@ -96,7 +123,7 @@ internal struct Fields
                 };
 
                 $f->weekday = $w + 1;
-            } else if (($l == Letter::quarter || $l == Letter::quarterAlone) && $n >= 3) {
+            } else if (($l == Letter::quarter || $l == Letter::quarterAlone) && ($n == 3 || $n == 4)) {
                 int64 $q = guard $s->name($names->quarters) ?? $s->name($names->quartersShort) else {
                     return .error(.expected($at, 'a quarter'));
                 };
@@ -128,7 +155,8 @@ internal struct Fields
                     return .error(.expected($at, 'a zone name'));
                 }
 
-                Zone $zone = guard $zones->load($id) else {
+                ZoneSource $source = $zones ?? Zone::system();
+                Zone $zone = guard $source->load($id) else {
                     return .error(.unknownZone($id, $start));
                 };
 
@@ -136,23 +164,30 @@ internal struct Fields
             } else if ($l == Letter::zoneName) {
                 return .error(.expected($at, "a pattern with 'VV' or an offset; abbreviations like 'z' are ambiguous"));
             } else if ($l == Letter::offset || $l == Letter::offsetZ || $l == Letter::offsetX || $l == Letter::offsetGmt) {
-                Offset $o = guard Fields::offset($s, $l == Letter::offsetGmt || ($l == Letter::offset && $n == 4)) else ($e) {
+                bool $basicSeconds = ($l == Letter::offsetZ || $l == Letter::offsetX) && ($n == 1 || $n == 4);
+                Offset $o = guard Fields::offset($s, $l == Letter::offsetGmt || ($l == Letter::offset && $n == 4), $basicSeconds) else ($e) {
                     return .error($e);
                 };
 
                 $f->offset = $o;
                 $f->offsetAt = $at;
             } else {
-                // the numeric fields
+                // the numeric fields; a narrow quarter, QQQQQ, is its one digit
+                int32 $min = $n;
                 int32 $max = 2;
 
                 if ($l == Letter::dayOfYear) {
                     $max = 3;
-                } else if ($n == 1 && ($l == Letter::quarter || $l == Letter::quarterAlone || $l == Letter::localWeekday || $l == Letter::localWeekdayAlone)) {
+                } else if ($l == Letter::quarter || $l == Letter::quarterAlone) {
+                    if ($n == 1 || $n == 5) {
+                        $min = 1;
+                        $max = 1;
+                    }
+                } else if ($n == 1 && ($l == Letter::localWeekday || $l == Letter::localWeekdayAlone)) {
                     $max = 1;
                 }
 
-                int64 $v = guard $s->digits($n, $max) else {
+                int64 $v = guard $s->digits($min, $max) else {
                     return .error(.expected($at, 'a number'));
                 };
 
@@ -166,7 +201,25 @@ internal struct Fields
             return .error(.trailing($s->at));
         }
 
-        return .ok($f);
+        return .ok;
+    }
+
+    // true when $expected is in $text at $at, compared byte by byte where it stands
+    private static function literal(const string& $text, usize $at, const string& $expected) : bool
+    {
+        usize $n = $expected->size();
+
+        if ($at + $n > $text->size()) {
+            return false;
+        }
+
+        for (usize $i = 0; $i < $n; $i++) {
+            if ($text->byte($at + $i) != $expected->byte($i)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     internal const function date(WeekRule $rule) : result<Date, ParseError>
@@ -203,7 +256,15 @@ internal struct Fields
             }
 
             Weekday $day = guard Weekday::of($wd);
-            return .ok(Date(week: Week($wy as int32, $w as int32), $day, $rule));
+
+            // the first and last week years spill into the years -10000 and 10000
+            int64 $serial = $rule->first($wy) + ($w - 1) * 7 + $rule->firstDay->until($day);
+
+            if ($serial < MIN_DAY || $serial > MAX_DAY) {
+                return .error(.impossible(.overflow));
+            }
+
+            return .ok(Date(epochDay: $serial));
         }
 
         int64 $y = guard $year else {
@@ -241,12 +302,21 @@ internal struct Fields
 
         Date $date = guard $found;
 
-        if (($weekday ?? ($date->weekday()->number() as int64)) != ($date->weekday()->number() as int64)) {
-            return .error(.mismatch(.weekday));
+        // a weekday or quarter in the text has to agree with the date
+        if ($weekday != null) {
+            int64 $wd = guard $weekday;
+
+            if ($wd != ($date->weekday()->number() as int64)) {
+                return .error(.mismatch(.weekday));
+            }
         }
 
-        if (($this->quarter ?? ($date->quarter() as int64)) != ($date->quarter() as int64)) {
-            return .error(.mismatch(.quarter));
+        if ($this->quarter != null) {
+            int64 $q = guard $this->quarter;
+
+            if ($q != ($date->quarter() as int64)) {
+                return .error(.mismatch(.quarter));
+            }
         }
 
         return .ok($date);
@@ -281,6 +351,36 @@ internal struct Fields
         };
 
         return .ok($t);
+    }
+
+    // RFC 3339: the ISO date and time with any fraction, then the offset
+    private static function stamp(const string& $text) : result<Fields, ParseError>
+    {
+        Scanner $s = Scanner($text);
+        DateTime $local = guard DateTime::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        usize $at = $s->at;
+        Offset $o = guard Offset::scan($s) else ($e) {
+            return .error($e);
+        };
+
+        if (!$s->done()) {
+            return .error(.trailing($s->at));
+        }
+
+        Fields $f = Fields();
+        $f->year = $local->date->year as int64;
+        $f->month = $local->date->month->number() as int64;
+        $f->day = $local->date->day as int64;
+        $f->hour = $local->time->hour as int64;
+        $f->minute = $local->time->minute as int64;
+        $f->second = $local->time->second as int64;
+        $f->nanos = $local->time->nanosecond as int64;
+        $f->offset = $o;
+        $f->offsetAt = $at;
+        return .ok($f);
     }
 
     private static function store(Fields& $f, Letter $l, int64 $v, usize $at) : status<ParseError>
@@ -368,7 +468,7 @@ internal struct Fields
     }
 
     // Z, +01, +0100, +01:00, +01:00:30, or GMT followed by any of those or nothing
-    private static function offset(Scanner& $s, bool $gmt) : result<Offset, ParseError>
+    private static function offset(Scanner& $s, bool $gmt, bool $basicSeconds) : result<Offset, ParseError>
     {
         if ($gmt || $s->peek() == 71) {
             if ($s->word('GMT') || $s->word('UTC')) {
@@ -386,7 +486,7 @@ internal struct Fields
             }
         }
 
-        return Offset::scan($s);
+        return Offset::scan($s, $basicSeconds);
     }
 
     // +h, +h:mm after GMT, where the hour may be one digit

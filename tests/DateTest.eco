@@ -1,4 +1,4 @@
-use calendar::{Date, Month, Weekday, Week, WeekRule, Period, Unit, Rounding, Overflow, DateError, ParseError};
+use calendar::{Date, Time, DateTime, Month, Weekday, Week, WeekRule, Period, Unit, Rounding, Overflow, DateError, ParseError};
 
 test date_epoch_round_trip_every_day
 {
@@ -165,4 +165,135 @@ test date_parse
     assert(str::from(Date::parse('2026-1-28')->failure()) == 'expected a two-digit month at byte 5');
     assert(str::from(Date::parse('26-10-28')->failure()) == 'expected a four-digit year at byte 0');
     assert(Date::parse('')->failed());
+}
+
+test date_huge_periods_overflow
+{
+    // far past anything representable, and past int64 once counted in months
+    assert(Date(2026, .january, 1)->add(Period::years(4000000000000000000), .clamp)->failed());
+    assert(Date(2026, .january, 1)->add(Period::days(-9000000000000000000), .clamp)->failed());
+    assert(Date::min()->add(Period::years(19998), .clamp)->has_value());
+}
+
+test date_month_steps_and_counts
+{
+    // month steps clamp to the shorter month, leap years included, years before 1 too
+    assert(str::from(Date(2024, .january, 31) + Period::months(1)) == '2024-02-29');
+    assert(str::from(Date(2023, .january, 31) + Period::months(1)) == '2023-02-28');
+    assert(str::from(Date(-1, .march, 31) - Period::months(1)) == '-0001-02-28');
+    assert(Date(2024, .december, 31)->ordinal() == 366);
+    assert(Date(-4, .march, 1)->ordinal() == 61);
+    assert(Date::min()->weekday() == Weekday::monday);
+    assert(Date::max()->weekday() == Weekday::friday);
+    assert(Date(epochDay: Date::min()->epochDay()) == Date::min());
+    assert(Date(epochDay: Date::max()->epochDay()) == Date::max());
+
+    // a clamped landing counts as a whole month, so adding the difference lands on the end
+    $from = Date(2010, .december, 31);
+    $to = Date(2017, .november, 30);
+    assert(str::from($from->until($to)) == 'P6Y11M');
+    assert($from + $from->until($to) == $to);
+    assert(str::from($to->until($from)) == '-P6Y10M30D');
+}
+
+test date_rounded_count_at_the_edge_of_the_range
+{
+    // rounding looks one step past the end, which used to leave the range and stop
+    assert(Date(-9999, .september, 15)->until(Date(9999, .december, 31), .year, .halfExpand) == 19998);
+    assert(Date(9999, .december, 31)->until(Date(-9999, .january, 1), .month, .ceil) == -239987);
+}
+
+test date_small_queries
+{
+    $d = Date(2026, .august, 15);
+    assert($d->quarter() == 3);
+    assert(!$d->leap());
+    assert(Date(2024, .august, 15)->leap());
+    assert(Date(2026, .january, 1)->ordinal() == 1);
+    assert(Date(2026, .december, 31)->ordinal() == 365);
+    assert(Date(2024, .march, 1)->ordinal() == 61);
+    assert($d->midnight() == DateTime(2026, .august, 15));
+    assert($d->at(Time(9, 30)) == DateTime(2026, .august, 15, 9, 30));
+    assert($d->since(Date(2026, .august, 1)) == Period::days(14));
+    assert($d->since(Date(2026, .august, 1), .week) == 2);
+    assert(Date(2026, .august, 1) < $d && $d > Date(2026, .august, 1) && $d >= $d);
+    assert(Date(2025, .december, 31) < Date(2026, .january, 1));
+    assert(Date(2026, .january, 31) < Date(2026, .february, 1));
+}
+
+test date_steps_and_subtraction
+{
+    $d = Date(2026, .march, 31);
+    assert($d - Period::months(1) == Date(2026, .february, 28));
+    assert($d->sub(Period::days(31)) == Date(2026, .february, 28));
+    assert($d->sub(Period::months(1), .reject)->failed());
+    Date $back = guard $d->sub(Period::months(2), .reject);
+    assert($back == Date(2026, .january, 31));
+    assert(Date::min()->sub(Period::days(1), .clamp)->failed());
+    assert(Date::min()->sub(Period::months(1), .clamp)->failed());
+    assert(Date::max()->add(Period::months(1), .clamp)->failed());
+    Date $edge = guard Date::max()->sub(Period::years(19998), .clamp);
+    assert($edge == Date(-9999, .december, 31));
+    assert($d + Period($years: 1, $months: -1) == Date(2027, .february, 28));
+    assert($d + Period($months: 1, $days: -1) == Date(2026, .april, 29));
+}
+
+test date_next_previous_and_with
+{
+    $sunday = Date(2026, .november, 1);
+    assert($sunday->next(.sunday) == Date(2026, .november, 8));
+    assert($sunday->previous(.sunday) == Date(2026, .october, 25));
+    assert($sunday->next(.monday) == Date(2026, .november, 2));
+    assert($sunday->previous(.saturday) == Date(2026, .october, 31));
+    assert(Date(2026, .december, 31)->next(.friday) == Date(2027, .january, 1));
+
+    $leap = Date(2024, .february, 29);
+    assert($leap->with($year: 2025) == Date(2025, .february, 28));
+    assert($leap->with($year: 2028) == Date(2028, .february, 29));
+    assert($leap->with($day: 1) == Date(2024, .february, 1));
+    assert($leap->with() == $leap);
+    assert(Date(2026, .march, 31)->with($month: .april) == Date(2026, .april, 30));
+}
+
+test date_ends_of_units
+{
+    assert(Date(2026, .february, 10)->end(.month) == Date(2026, .february, 28));
+    assert(Date(2024, .february, 10)->end(.month) == Date(2024, .february, 29));
+    assert(Date(2026, .february, 10)->end(.year) == Date(2026, .december, 31));
+    assert(Date(2026, .february, 10)->end(.quarter) == Date(2026, .march, 31));
+    assert(Date(2026, .august, 10)->end(.quarter) == Date(2026, .september, 30));
+    assert(Date(2026, .february, 10)->end(.week, WeekRule(.sunday, 1)) == Date(2026, .february, 14));
+    assert(Date(2026, .february, 10)->end(.day) == Date(2026, .february, 10));
+    assert(Date(2026, .february, 10)->start(.hour) == Date(2026, .february, 10));
+    assert(Date(2026, .december, 31)->start(.quarter) == Date(2026, .october, 1));
+}
+
+test date_values_key_and_hash
+{
+    assert(hash::of(Date(2026, .march, 1)) == hash::of(Date(2026, .march, 1)));
+    assert(hash::of(Date(2026, .march, 1)) != hash::of(Date(2026, .march, 2)));
+    map<DateTime, int32> $slots = map<DateTime, int32>();
+    $slots[DateTime(2026, .march, 1, 9)] = 1;
+    $slots[DateTime(2026, .march, 1, 10)] = 2;
+    assert($slots[DateTime(2026, .march, 1, 9)] == 1);
+    assert($slots->count() == 2);
+    map<Time, string> $times = map<Time, string>();
+    $times[Time(9)] = 'nine';
+    assert($times->has(Time(9)));
+    assert(!$times->has(Time(9, 0, 0, 1)));
+}
+
+test date_parse_more
+{
+    Date $plus = guard Date::parse('+2026-10-28');
+    assert($plus == Date(2026, .october, 28));
+    Date $zero = guard Date::parse('0000-02-29');
+    assert($zero == Date(0, .february, 29));
+    assert(str::from(Date::parse('2026/10/28')->failure()) == "expected '-' at byte 4");
+    assert(str::from(Date::parse('2026-10-2')->failure()) == 'expected a two-digit day at byte 8');
+    assert(str::from(Date::parse('2026-00-10')->failure()) == 'month 0 at byte 5 is out of range');
+    assert(str::from(Date::parse('2026-10-00')->failure()) == 'day 0 at byte 8 is out of range');
+    assert(str::from(Date::of(2026, 1, 0)->failure()) == '2026-01 has no day 0');
+    assert(str::from(Date::of(-10000, 1, 1)->failure()) == 'year -10000 is out of range');
+    assert(str::from(Date::of(-43, 2, 29)->failure()) == '-0043-02 has no day 29');
 }

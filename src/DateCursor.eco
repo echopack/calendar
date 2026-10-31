@@ -12,6 +12,10 @@ public struct DateCursor : contract::iterator<Date>, contract::keyed<usize>
     private Date $value;
     private int64 $produced;
 
+    /**
+     * A cursor before the first date. Nothing checks the step here, so prefer `foreach` over a
+     * `DateRange` or `DateSteps`, which refuse a step that would never reach `$end`.
+     */
     constructor(Date $start, Date $end, Period $step)
     {
         $this->start = $start;
@@ -21,6 +25,9 @@ public struct DateCursor : contract::iterator<Date>, contract::keyed<usize>
         $this->produced = 0;
     }
 
+    /**
+     * Move to the next date. False once it would reach `$end` or leave the supported years.
+     */
     public function advance() : bool
     {
         Period $by = $this->step * $this->produced;
@@ -37,6 +44,9 @@ public struct DateCursor : contract::iterator<Date>, contract::keyed<usize>
         return true;
     }
 
+    /**
+     * The date the cursor is on.
+     */
     public function current() : Date&
     {
         return &$this->value;

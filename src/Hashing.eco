@@ -4,21 +4,34 @@
 
 namespace hash;
 
+/**
+ * Hash of a `Date`, from its day number, so dates can key a map.
+ */
 public function of(const calendar::Date& $d) : uint64
 {
     return of($d->epochDay());
 }
 
+/**
+ * Hash of a `Time`, from its nanoseconds since midnight, so times can key a map.
+ */
 public function of(const calendar::Time& $t) : uint64
 {
     return of($t->nanos());
 }
 
+/**
+ * Hash of a `DateTime`, from its date and its time, so date-times can key a map.
+ */
 public function of(const calendar::DateTime& $dt) : uint64
 {
     return combine(of($dt->date), of($dt->time));
 }
 
+/**
+ * Hash of a `Zoned`, from its instant and zone id. The zone counts because `==` compares
+ * it too: the same instant in Zurich and in UTC are two keys.
+ */
 public function of(const calendar::Zoned& $z) : uint64
 {
     return combine(of($z->instant->unix_secs()), combine(of($z->instant->since_epoch()->subsec_nanos()), of($z->zone->id)));

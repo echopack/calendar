@@ -1,0 +1,14 @@
+namespace calendar;
+
+/**
+ * What a format reads and writes. Most follow their pattern letter for letter; the protocol
+ * formats have rules a pattern cannot say, like an optional fraction or the obsolete forms
+ * mail still carries.
+ */
+internal enum Protocol
+{
+    case pattern;
+    case rfc3339;
+    case rfc2822;
+    case http;
+}

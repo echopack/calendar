@@ -3,10 +3,16 @@ namespace calendar;
 use std::time;
 
 /**
- * The machine's wall clock.
+ * The machine's wall clock, the default for a `Calendar`.
+ *
+ * It reads the system time on every call, so it jumps when the system clock is adjusted.
  */
+#[atomic]
 public class SystemClock : Clock
 {
+    /**
+     * The system's current time.
+     */
     public const function now() : time::timestamp
     {
         return time::timestamp::now();

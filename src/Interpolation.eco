@@ -7,6 +7,9 @@ namespace str;
 
 use calendar::{Date, Time, DateTime, Period, Week, DateRange, DateError, ParseError, Month, Weekday};
 
+/**
+ * ISO 8601 date, `2026-03-27`.
+ */
 public function from(const Date& $d) : string
 {
     $y = calendar::pad($d->year as int64, 4);
@@ -15,6 +18,9 @@ public function from(const Date& $d) : string
     return "{$y}-{$m}-{$day}";
 }
 
+/**
+ * ISO 8601 time, `09:30:00`; a fraction of a second only when there is one, `09:30:00.250`.
+ */
 public function from(const Time& $t) : string
 {
     $h = calendar::pad($t->hour as int64, 2);
@@ -30,11 +36,17 @@ public function from(const Time& $t) : string
     return $out;
 }
 
+/**
+ * ISO 8601 date and time, `2026-03-27T09:30:00`.
+ */
 public function from(const DateTime& $dt) : string
 {
     return "{$dt->date}T{$dt->time}";
 }
 
+/**
+ * ISO week, `2026-W13`.
+ */
 public function from(const Week& $w) : string
 {
     $y = calendar::pad($w->year as int64, 4);
@@ -42,6 +54,9 @@ public function from(const Week& $w) : string
     return "{$y}-W{$n}";
 }
 
+/**
+ * Half-open, `[2026-03-01, 2026-04-01)`.
+ */
 public function from(const DateRange& $r) : string
 {
     return "[{$r->start}, {$r->end})";
@@ -122,6 +137,9 @@ private function periodPart(string& $out, int64 $value, const string& $unit) : v
     $out->append($unit);
 }
 
+/**
+ * A sentence describing the error, such as `2026-02 has no day 30`.
+ */
 public function from(const DateError& $e) : string
 {
     return match ($e) {
@@ -133,6 +151,10 @@ public function from(const DateError& $e) : string
     };
 }
 
+/**
+ * A sentence describing the error and where it is, such as
+ * `expected a two-digit hour at byte 0`.
+ */
 public function from(const ParseError& $e) : string
 {
     return match ($e) {
@@ -160,6 +182,9 @@ private function invalidAt(calendar::Field $field, int64 $value, uint64 $at) : s
     return "{$name} {$value} at byte {$at} is out of range";
 }
 
+/**
+ * The offset with a colon, `+01:00`; seconds only when there are some, `+00:34:08`.
+ */
 public function from(const calendar::Offset& $o) : string
 {
     return $o->text(true, true);
@@ -186,6 +211,9 @@ public function from(const calendar::Interval& $i) : string
     return "[{$start}Z, {$end}Z)";
 }
 
+/**
+ * A sentence describing the error, such as `no time zone named 'Europe/Zurch'`.
+ */
 public function from(const calendar::ZoneError& $e) : string
 {
     return match ($e) {
@@ -196,6 +224,10 @@ public function from(const calendar::ZoneError& $e) : string
     };
 }
 
+/**
+ * A sentence describing the error with the likely fix, such as `'D' is the day of the year;
+ * did you mean 'd'? at byte 0`.
+ */
 public function from(const calendar::FormatError& $e) : string
 {
     return match ($e) {
@@ -220,16 +252,28 @@ public function from(const calendar::Date& $d, const string& $spec) : string
     return calendar::Format($spec)->render($d);
 }
 
+/**
+ * `"{$time:HH:mm}"`: the spec is a pattern, rendered with English names. A bad pattern stops
+ * the program, as does a date field.
+ */
 public function from(const calendar::Time& $t, const string& $spec) : string
 {
     return calendar::Format($spec)->render($t);
 }
 
+/**
+ * `"{$dt:dd.MM.yyyy HH:mm}"`: the spec is a pattern, rendered with English names. A bad
+ * pattern stops the program, as does a zone field.
+ */
 public function from(const calendar::DateTime& $dt, const string& $spec) : string
 {
     return calendar::Format($spec)->render($dt);
 }
 
+/**
+ * `"{$z:HH:mm z}"`: the spec is a pattern, rendered with English names in the value's own
+ * zone. A bad pattern stops the program.
+ */
 public function from(const calendar::Zoned& $z, const string& $spec) : string
 {
     return calendar::Format($spec)->render($z);

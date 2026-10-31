@@ -10,21 +10,35 @@ public class ManualClock : Clock
 {
     private time::timestamp $current;
 
+    /**
+     * A clock that reads `$start` until it is moved.
+     */
     constructor(time::timestamp $start)
     {
         $this->current = $start;
     }
 
+    /**
+     * The instant the clock was last set or advanced to.
+     */
     public const function now() : time::timestamp
     {
         return $this->current;
     }
 
+    /**
+     * Jump to `$at`, forwards or backwards. Every `Calendar` holding this clock sees the new
+     * time on its next read.
+     */
     public function set(time::timestamp $at) : void
     {
         $this->current = $at;
     }
 
+    /**
+     * Move forward by `$by`; a negative duration moves back. Every `Calendar` holding this
+     * clock sees the new time on its next read.
+     */
     public function advance(const time::duration& $by) : void
     {
         $this->current = $this->current + $by;

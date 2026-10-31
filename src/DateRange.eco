@@ -3,17 +3,37 @@ namespace calendar;
 /**
  * The days from `$start` up to, not including, `$end`.
  *
+ * ```echo
+ * $march = DateRange(from: Date(2026, .march, 1), until: Date(2026, .april, 1));
+ * echo "{$march}"; // [2026-03-01, 2026-04-01)
+ * echo $march->count(); // 31
+ * $week = DateRange(from: Date(2026, .march, 23), through: Date(2026, .march, 27));
+ * echo "{$week}"; // [2026-03-23, 2026-03-28)
+ * ```
+ *
  * Half-open, so October is `DateRange(from: Date(2026, .october, 1), until: Date(2026,
  * .november, 1))` and two adjacent months share no day. When the last day is what you have,
  * say so: `DateRange(from: $a, through: $b)` includes `$b`.
  *
  * `foreach` walks it a day at a time; `every()` steps by any period.
  */
+#[docs::see: ["Interval", "DateSteps", "Date"]]
 public struct DateRange : contract::iterable<Date>, contract::const_iterable<Date>
 {
+    /**
+     * The first day, included unless the range is empty.
+     */
     public const Date $start;
+
+    /**
+     * The day after the last one, not included.
+     */
     public const Date $end;
 
+    /**
+     * The days from `$start` up to, not including, `$end`. Equal dates make an empty range; an
+     * end before the start stops the program.
+     */
     constructor(from: Date $start, until: Date $end)
     {
         if ($end < $start) {
@@ -24,6 +44,11 @@ public struct DateRange : contract::iterable<Date>, contract::const_iterable<Dat
         $this->end = $end;
     }
 
+    /**
+     * The days from `$start` through `$last`, both included. The end is kept as the day after
+     * `$last`, so `Date::max()` cannot be the last day of a range. A `$last` before `$start`
+     * stops the program.
+     */
     constructor(from: Date $start, through: Date $last)
     {
         if ($last < $start) {
@@ -50,6 +75,9 @@ public struct DateRange : contract::iterable<Date>, contract::const_iterable<Dat
         return $this->end->epochDay() - $this->start->epochDay();
     }
 
+    /**
+     * True when the range holds no days, which is when it starts where it ends.
+     */
     public const function empty() : bool
     {
         return $this->start == $this->end;
@@ -68,11 +96,11 @@ public struct DateRange : contract::iterable<Date>, contract::const_iterable<Dat
     }
 
     /**
-     * True when the two ranges share at least one day.
+     * True when the two ranges share at least one day. An empty range shares none.
      */
     public const function overlaps(const DateRange& $other) : bool
     {
-        return $this->start < $other->end && $other->start < $this->end;
+        return $this->start < $other->end && $other->start < $this->end && !$this->empty() && !$other->empty();
     }
 
     /**
@@ -102,12 +130,18 @@ public struct DateRange : contract::iterable<Date>, contract::const_iterable<Dat
      * The dates `$start`, `$start + $step`, `$start + $step * 2` and on while they stay in the
      * range. Each one is counted from the start, so monthly steps from January 31 give
      * February 28 and then March 31, never drifting to the 28th.
+     *
+     * The step must move forward and hold only years, months, weeks and days; a step of zero,
+     * a negative part or a clock part stops the program.
      */
     public const function every(const Period& $step) : DateSteps
     {
         return DateSteps($this->start, $this->end, $step);
     }
 
+    /**
+     * A cursor over each day in turn, which is what `foreach` uses.
+     */
     public function iterate() : DateCursor
     {
         return DateCursor($this->start, $this->end, Period::days(1));
@@ -119,6 +153,9 @@ public struct DateRange : contract::iterable<Date>, contract::const_iterable<Dat
     }
 }
 
+/**
+ * Equal when start and end both match, so two empty ranges on different days are not equal.
+ */
 operator (const DateRange& $a) == (const DateRange& $b) : bool
 {
     return $a->start == $b->start && $a->end == $b->end;

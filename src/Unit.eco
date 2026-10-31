@@ -11,16 +11,59 @@ use std::time;
  */
 public enum Unit
 {
+    /**
+     * A calendar year, 365 or 366 days.
+     */
     case year;
+
+    /**
+     * Three months, starting in January, April, July or October.
+     */
     case quarter;
+
+    /**
+     * A calendar month, 28 to 31 days.
+     */
     case month;
+
+    /**
+     * Seven days. Where a week starts is a `WeekRule`.
+     */
     case week;
+
+    /**
+     * One day: 24 hours on a wall clock, 23 or 25 across a DST change in a zone.
+     */
     case day;
+
+    /**
+     * 60 minutes.
+     */
     case hour;
+
+    /**
+     * 60 seconds.
+     */
     case minute;
+
+    /**
+     * One second. There are no leap seconds.
+     */
     case second;
+
+    /**
+     * A thousandth of a second.
+     */
     case millisecond;
+
+    /**
+     * A millionth of a second.
+     */
     case microsecond;
+
+    /**
+     * A billionth of a second, the finest unit the library keeps.
+     */
     case nanosecond;
 
     /**
@@ -63,6 +106,21 @@ public enum Unit
             .microsecond => .second,
             .nanosecond => .second,
             else => $this,
+        };
+    }
+
+    /**
+     * `$count` of this unit counted in the spoken unit: quarters times three, units below a
+     * second as whole seconds, cut toward zero.
+     */
+    internal const function said(int64 $count) : int64
+    {
+        return match ($this) {
+            .quarter => $count * 3,
+            .millisecond => $count / 1000,
+            .microsecond => $count / 1000000,
+            .nanosecond => $count / NANOS_PER_SEC,
+            else => $count,
         };
     }
 

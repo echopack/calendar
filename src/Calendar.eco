@@ -11,21 +11,45 @@ namespace calendar;
  * ```echo
  * $cal = Calendar($zone: Zone(named: 'Europe/Zurich'), $locale: Locale::de());
  * Date $today = $cal->today();
+ * echo $cal->format(Date(2026, .march, 27), 'EEEE d.M.yyyy'); // Freitag 27.3.2026
  * ```
  *
  * Pattern strings given to `format` and `parse` take this calendar's language and week rule.
  * A compiled `Format` keeps its own.
  */
+#[atomic]
+#[docs::groups: ["Constructors", "Now", "Zones", "Format and parse", "Human"]]
+#[docs::see: ["Clock", "ZoneSource", "Locale", "WeekRule"]]
 public class Calendar
 {
+    /**
+     * The zone `now`, `today` and `at` read wall clocks in.
+     */
     public const Zone $zone;
+
+    /**
+     * The language for pattern strings and `human`.
+     */
     public const Locale $locale;
+
+    /**
+     * Where "now" comes from.
+     */
     public const Clock $clock;
+
+    /**
+     * How weeks are numbered for `week` and for pattern strings.
+     */
     public const WeekRule $weekRule;
 
     // zone sources cache what they load, so the calendar holds this one writable
     private ZoneSource $source;
 
+    /**
+     * A calendar from its parts, each with a default: the machine's zone (`Zone::local()`),
+     * English, the system clock, the system's zone files and ISO weeks. Name only the ones to
+     * change: `Calendar($clock: ManualClock($start))`.
+     */
     constructor(Zone $zone = Zone::local(), Locale $locale = Locale::en(), Clock $clock = SystemClock(), ZoneSource $zones = Zone::system(), WeekRule $weekRule = WeekRule::iso())
     {
         $this->zone = $zone;
@@ -38,6 +62,7 @@ public class Calendar
     /**
      * The current instant in this calendar's zone.
      */
+    #[docs::group: "Now"]
     public function now() : Zoned
     {
         return Zoned($this->clock->now(), $this->zone);
@@ -46,6 +71,7 @@ public class Calendar
     /**
      * Today's date in this calendar's zone.
      */
+    #[docs::group: "Now"]
     public function today() : Date
     {
         return $this->now()->date;
@@ -54,6 +80,7 @@ public class Calendar
     /**
      * The week `$date` falls in under this calendar's week rule.
      */
+    #[docs::group: "Now"]
     public function week(const Date& $date) : Week
     {
         return $date->week($this->weekRule);
@@ -62,6 +89,7 @@ public class Calendar
     /**
      * Where this calendar loads named zones from.
      */
+    #[docs::group: "Zones"]
     public function zones() : ZoneSource
     {
         return $this->source;
@@ -70,6 +98,7 @@ public class Calendar
     /**
      * A zone by name from this calendar's source.
      */
+    #[docs::group: "Zones"]
     public function zone(const string& $id) : result<Zone, ZoneError>
     {
         return $this->source->load($id);
@@ -78,6 +107,7 @@ public class Calendar
     /**
      * A wall clock in this calendar's zone, DST resolved compatibly.
      */
+    #[docs::group: "Zones"]
     public function at(const DateTime& $local) : Zoned
     {
         return $local->at($this->zone);
@@ -86,6 +116,7 @@ public class Calendar
     /**
      * Parse RFC 9557 text with zones from this calendar's source.
      */
+    #[docs::group: "Format and parse"]
     public function parse(const string& $text) : result<Zoned, ParseError>
     {
         return Zoned::parse($text, $this->source);
@@ -95,6 +126,7 @@ public class Calendar
      * Parse with a pattern, names in this calendar's language. Text without a zone or offset
      * is read in this calendar's zone. A bad pattern stops the program.
      */
+    #[docs::group: "Format and parse"]
     public function parse(const string& $text, const string& $pattern) : result<Zoned, ParseError>
     {
         return Zoned::read($text, $this->compile($pattern), $this->source, $this->zone);
@@ -104,6 +136,7 @@ public class Calendar
      * Parse with a compiled format, in its own language. Text without a zone or offset is
      * read in this calendar's zone.
      */
+    #[docs::group: "Format and parse"]
     public function parse(const string& $text, const Format& $format) : result<Zoned, ParseError>
     {
         return Zoned::read($text, $format, $this->source, $this->zone);
@@ -113,21 +146,25 @@ public class Calendar
      * Render with a pattern in this calendar's language and week rule. A bad pattern stops
      * the program.
      */
+    #[docs::group: "Format and parse"]
     public function format(const Date& $date, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($date);
     }
 
+    #[docs::group: "Format and parse"]
     public function format(const Time& $time, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($time);
     }
 
+    #[docs::group: "Format and parse"]
     public function format(const DateTime& $dt, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($dt);
     }
 
+    #[docs::group: "Format and parse"]
     public function format(const Zoned& $z, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($z);
@@ -136,21 +173,25 @@ public class Calendar
     /**
      * Render with a compiled format, which keeps its own language and week rule.
      */
+    #[docs::group: "Format and parse"]
     public function format(const Date& $date, const Format& $format) : string
     {
         return $format->render($date);
     }
 
+    #[docs::group: "Format and parse"]
     public function format(const Time& $time, const Format& $format) : string
     {
         return $format->render($time);
     }
 
+    #[docs::group: "Format and parse"]
     public function format(const DateTime& $dt, const Format& $format) : string
     {
         return $format->render($dt);
     }
 
+    #[docs::group: "Format and parse"]
     public function format(const Zoned& $z, const Format& $format) : string
     {
         return $format->render($z);
@@ -160,6 +201,7 @@ public class Calendar
      * How far `$then` is from now, in this calendar's language: "3 days ago", "in 2 hours",
      * "yesterday".
      */
+    #[docs::group: "Human"]
     public function human(const Zoned& $then, Relative $style = Relative()) : string
     {
         return $style->render($then, $this->now(), $this->locale);
@@ -168,6 +210,7 @@ public class Calendar
     /**
      * How far the day `$then` is from today: "tomorrow", "in 3 weeks".
      */
+    #[docs::group: "Human"]
     public function human(const Date& $then, Relative $style = Relative()) : string
     {
         return $style->render($then, $this->today(), $this->locale);

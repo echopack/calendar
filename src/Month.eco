@@ -33,6 +33,7 @@ public enum Month : uint8
     /**
      * The month number as an `int32`, 1 to 12.
      */
+    #[inline]
     public const function number() : int32
     {
         return $this->value() as int32;
@@ -43,23 +44,7 @@ public enum Month : uint8
      */
     public const function days(int32 $year) : int32
     {
-        return match ($this) {
-            .february => Month::february($year),
-            .april => 30,
-            .june => 30,
-            .september => 30,
-            .november => 30,
-            else => 31,
-        };
-    }
-
-    private static function february(int32 $year) : int32
-    {
-        if (Date::leap($year)) {
-            return 29;
-        }
-
-        return 28;
+        return Date::monthDays($year as int64, $this->number() as int64) as int32;
     }
 
     /**
@@ -80,11 +65,17 @@ public enum Month : uint8
         return $m;
     }
 
+    /**
+     * The month after this one. December wraps to January.
+     */
     public const function next() : Month
     {
         return $this->plus(1);
     }
 
+    /**
+     * The month before this one. January wraps to December.
+     */
     public const function previous() : Month
     {
         return $this->plus(-1);

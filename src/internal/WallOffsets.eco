@@ -1,0 +1,22 @@
+namespace calendar;
+
+/**
+ * What a zone says about one wall clock reading: a single offset, a gap the clocks skipped,
+ * or a fold they repeated. `$before` is the offset in force before the change and `$after`
+ * the one after it; for an ordinary reading both are the same. `scan` means the reading lies
+ * past the zone's table, where only its rule can answer.
+ */
+internal struct WallOffsets
+{
+    internal const WallKind $kind;
+    internal const int32 $before;
+    internal const int32 $after;
+}
+
+internal enum WallKind : uint8
+{
+    case single = 0;
+    case gap = 1;
+    case fold = 2;
+    case scan = 3;
+}

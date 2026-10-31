@@ -9,13 +9,48 @@ namespace calendar;
  */
 public enum FormatError
 {
+    /**
+     * The pattern is empty.
+     */
     case empty;
+
+    /**
+     * `$letter` is not a pattern letter. Literal words go in single quotes.
+     */
     case unknownLetter(string $letter, usize $at);
+
+    /**
+     * More of `$letter` in a row than the field has forms for.
+     */
     case tooLong(string $letter, usize $at);
+
+    /**
+     * A quote opened at `$at` is never closed.
+     */
     case unclosedQuote(usize $at);
+
+    /**
+     * `Y`, the week-based year, without a week `w`; `y` was almost certainly meant.
+     */
     case weekYearWithoutWeek(usize $at);
+
+    /**
+     * A week `w` with the calendar year `y`; weeks pair with the week-based year `Y`.
+     */
     case weekWithoutWeekYear(usize $at);
+
+    /**
+     * `D`, the day of the year, next to a month; `d` was almost certainly meant.
+     */
     case dayOfYearWithMonth(usize $at);
+
+    /**
+     * `m`, minutes, in a date pattern without an hour; `M` was almost certainly meant.
+     */
     case minuteWithoutHour(usize $at);
+
+    /**
+     * A 12-hour `h` or `K` without the AM/PM `a`, which leaves morning and evening the same.
+     */
     case hourWithoutPeriod(usize $at);
 }

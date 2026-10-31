@@ -3,7 +3,17 @@ namespace calendar;
 use std::time;
 
 /**
- * A compiled date pattern in the Unicode letter syntax: `yyyy-MM-dd`, `EEEE, d. MMMM yyyy`,
+ * A compiled date pattern that writes and reads dates, times and zones as text.
+ *
+ * ```echo
+ * $date = Date(2026, .march, 27);
+ * echo Format('dd.MM.yyyy')->render($date); // 27.03.2026
+ * echo Format('EEEE, d. MMMM yyyy')->locale(Locale::de())->render($date); // Freitag, 27. März 2026
+ * Date $read = guard Date::parse('01.08.2026', Format('dd.MM.yyyy'));
+ * echo "{$read}"; // 2026-08-01
+ * ```
+ *
+ * Patterns use the Unicode letter syntax: `yyyy-MM-dd`, `EEEE, d. MMMM yyyy`,
  * `HH:mm:ss.SSS XXX`. Letters are fields, text in single quotes is literal (`''` is one
  * quote), and anything that is not a letter is literal as it stands.
  *
@@ -13,7 +23,7 @@ use std::time;
  * | `y` `yy` `yyyy` | year of the era; `yy` is the last two digits |
  * | `u` | year with a sign, -9999 to 9999 |
  * | `Y` | year of the week; only with `w` |
- * | `Q` `QQQ` `QQQQ` | quarter: `4`, `Q4`, `4th quarter` |
+ * | `Q` `QQQ` `QQQQ` `QQQQQ` | quarter: `4`, `Q4`, `4th quarter`, `4`; `q` the standalone form |
  * | `M` `MM` `MMM` `MMMM` `MMMMM` | month: `9`, `09`, `Sep`, `September`, `S`; `L` the standalone form |
  * | `w` | week of the week year |
  * | `d` `D` | day of the month; day of the year |
@@ -35,8 +45,13 @@ use std::time;
  * `Format('dd.MM.yyyy')` stops the program on a bad pattern, so use it for patterns you write
  * in code. A pattern that arrives at runtime goes through `Format::of`, which returns a result.
  */
+#[atomic]
+#[docs::see: ["Locale", "Calendar", "FormatError"]]
 public class Format
 {
+    /**
+     * The pattern as it was written.
+     */
     public const string $pattern;
     internal array<Token> $tokens;
     internal WeekRule $rule;
@@ -45,12 +60,17 @@ public class Format
     // a zone the format always writes and reads in, and the language of its names
     internal Zone? $zone;
     internal Locale $names;
+    internal Protocol $protocol;
 
-    internal static Format $rfc3339Format = Format::fixed("yyyy-MM-dd'T'HH:mm:ssXXX", null);
-    internal static Format $rfc2822Format = Format::fixed('EEE, dd MMM yyyy HH:mm:ss xx', null);
-    internal static Format $httpFormat = Format::fixed("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Zone::utc());
+    // only day, month and year digits between literal text, each once: Date::parse can read
+    // those without the general field machinery
+    internal bool $digitsOnly;
 
-    internal constructor(string $pattern, array<Token> $tokens, WeekRule $rule, int64 $pivot, Zone? $zone, Locale $names)
+    internal static Format $rfc3339Format = Format::fixed("uuuu-MM-dd'T'HH:mm:ssXXX", null, .rfc3339);
+    internal static Format $rfc2822Format = Format::fixed('EEE, dd MMM yyyy HH:mm:ss xx', null, .rfc2822);
+    internal static Format $httpFormat = Format::fixed("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Zone::utc(), .http);
+
+    internal constructor(string $pattern, array<Token> $tokens, WeekRule $rule, int64 $pivot, Zone? $zone, Locale $names, Protocol $protocol)
     {
         $this->pattern = $pattern;
         $this->tokens = $tokens;
@@ -58,6 +78,34 @@ public class Format
         $this->pivot = $pivot;
         $this->zone = $zone;
         $this->names = $names;
+        $this->protocol = $protocol;
+        $this->digitsOnly = $protocol == Protocol::pattern && Format::numericDate($this->tokens);
+    }
+
+    // d or dd, M or MM, yy or yyyy, each exactly once, with only literal text around them
+    private static function numericDate(const array<Token>& $tokens) : bool
+    {
+        int32 $days = 0;
+        int32 $months = 0;
+        int32 $years = 0;
+
+        foreach ($tokens as const &$t) {
+            if ($t->letter == Letter::text) {
+                continue;
+            }
+
+            if ($t->letter == Letter::day) {
+                $days++;
+            } else if ($t->letter == Letter::month && $t->count <= 2) {
+                $months++;
+            } else if ($t->letter == Letter::year && ($t->count == 2 || $t->count == 4)) {
+                $years++;
+            } else {
+                return false;
+            }
+        }
+
+        return $days == 1 && $months == 1 && $years == 1;
     }
 
     /**
@@ -75,10 +123,15 @@ public class Format
         $this->pivot = $f->pivot;
         $this->zone = $f->zone;
         $this->names = $f->names;
+        $this->protocol = $f->protocol;
+        $this->digitsOnly = $f->digitsOnly;
     }
 
     /**
      * Compile a pattern from runtime text, refusing unknown letters and the usual mix-ups.
+     *
+     * The error says what is wrong and where, such as `YYYY` without a week `w`, where
+     * `yyyy` was almost certainly meant.
      */
     public static function of(const string& $pattern) : result<Format, FormatError>
     {
@@ -174,11 +227,12 @@ public class Format
             return .error($e);
         };
 
-        return .ok(Format($pattern, $tokens, WeekRule::iso(), 2000, null, Locale::en()));
+        return .ok(Format($pattern, $tokens, WeekRule::iso(), 2000, null, Locale::en(), .pattern));
     }
 
     /**
-     * RFC 3339, `2026-10-28T09:30:00+01:00`.
+     * RFC 3339, `2026-10-28T09:30:00+01:00`. A fraction of a second is written when there is
+     * one and read at any length up to nanoseconds; the year keeps its sign.
      */
     public static function rfc3339() : Format
     {
@@ -186,7 +240,9 @@ public class Format
     }
 
     /**
-     * RFC 2822 and RFC 5322 mail dates, `Wed, 28 Oct 2026 09:30:00 +0100`. English.
+     * RFC 2822 and RFC 5322 mail dates, `Wed, 28 Oct 2026 09:30:00 +0100`. English. Reading
+     * also takes what real mail sends: no weekday, a one-digit day, two-digit years, no
+     * seconds, zone names like `GMT` or `EST`, and a trailing comment.
      */
     public static function rfc2822() : Format
     {
@@ -203,11 +259,19 @@ public class Format
     }
 
     /**
-     * A copy that writes and reads month, weekday, era and AM/PM names in `$locale`.
+     * A copy that writes and reads month, weekday, era and AM/PM names in `$locale`. The
+     * protocol formats, `rfc3339()`, `rfc2822()` and `http()`, stay English as their
+     * standards say.
      */
     public const function locale(Locale $locale) : Format
     {
-        return Format($this->pattern, $this->tokens, $this->rule, $this->pivot, $this->zone, $locale);
+        Locale $names = $locale;
+
+        if ($this->protocol != Protocol::pattern) {
+            $names = $this->names;
+        }
+
+        return Format($this->pattern, $this->tokens, $this->rule, $this->pivot, $this->zone, $names, $this->protocol);
     }
 
     /**
@@ -215,7 +279,7 @@ public class Format
      */
     public const function weeks(WeekRule $rule) : Format
     {
-        return Format($this->pattern, $this->tokens, $rule, $this->pivot, $this->zone, $this->names);
+        return Format($this->pattern, $this->tokens, $rule, $this->pivot, $this->zone, $this->names, $this->protocol);
     }
 
     /**
@@ -225,9 +289,16 @@ public class Format
      */
     public const function pivot(int32 $start) : Format
     {
-        return Format($this->pattern, $this->tokens, $this->rule, $start as int64, $this->zone, $this->names);
+        return Format($this->pattern, $this->tokens, $this->rule, $start as int64, $this->zone, $this->names, $this->protocol);
     }
 
+    /**
+     * The value written out in this pattern.
+     *
+     * A field the value does not have is a bug in the code, so it stops the program: `HH` on a
+     * `Date`, `dd` on a `Time`, `z` or `XXX` on a `DateTime`. The message names the pattern and
+     * what is missing, such as `the pattern 'HH:mm' needs a time of day, and a Date has none`.
+     */
     public const function render(const Date& $date) : string
     {
         return $this->write(Moment($date: $date, $kind: 'a Date'));
@@ -243,23 +314,26 @@ public class Format
         return $this->write(Moment($date: $dt->date, $time: $dt->time, $kind: 'a DateTime'));
     }
 
+    /**
+     * A `Zoned` is written in its own zone and offset, except by `http()`, which converts it
+     * to UTC first.
+     */
     public const function render(const Zoned& $z) : string
     {
-        Zoned $at = $z;
-
         if ($this->zone != null) {
             Zone $zone = guard $this->zone;
-            $at = $z->to($zone);
+            Zoned $at = $z->to($zone);
+            return $this->write(Moment($at->date, $at->time, $at->offset, $at->zone, $at->instant, 'a Zoned'));
         }
 
-        return $this->write(Moment($at->date, $at->time, $at->offset, $at->zone, $at->instant, 'a Zoned'));
+        return $this->write(Moment($z->date, $z->time, $z->offset, $z->zone, $z->instant, 'a Zoned'));
     }
 
     // a protocol format: always English, optionally always in one zone
-    private static function fixed(const string& $pattern, Zone? $zone) : Format
+    private static function fixed(const string& $pattern, Zone? $zone, Protocol $protocol) : Format
     {
         Format $f = Format($pattern);
-        return Format($f->pattern, $f->tokens, WeekRule::iso(), 2000, $zone, Locale::en());
+        return Format($f->pattern, $f->tokens, WeekRule::iso(), 2000, $zone, Locale::en(), $protocol);
     }
 
     private static function check(const string& $pattern, const array<Token>& $tokens) : status<FormatError>
@@ -336,57 +410,90 @@ public class Format
 
     internal const function write(const Moment& $m) : string
     {
-        Locale $names = $this->names;
-        string $out = '';
+        if ($this->protocol == Protocol::rfc3339) {
+            return $this->stamp($m);
+        }
+
+        Writer $w = Writer();
 
         foreach ($this->tokens as const &$t) {
             if ($t->literal()) {
-                $out->append($t->text);
+                $w->text($t->text);
                 continue;
             }
 
             if ($t->letter->dated()) {
-                Date $d = guard $m->date else {
+                if ($m->date == null) {
                     die("calendar: the pattern '{$this->pattern}' needs a date, and {$m->kind} has none");
-                };
+                }
 
-                $out->append($this->dateField($t, $d, $names));
+                $this->dateField($w, $t, $m->date ?? Date::min());
             } else if ($t->letter->timed()) {
-                Time $time = guard $m->time else {
+                if ($m->time == null) {
                     die("calendar: the pattern '{$this->pattern}' needs a time of day, and {$m->kind} has none");
-                };
+                }
 
-                $out->append(Format::timeField($t, $time, $names));
+                Format::timeField($w, $t, $m->time ?? Time::midnight(), $this->names);
             } else {
                 Offset $o = guard $m->offset else {
                     die("calendar: the pattern '{$this->pattern}' needs a zone, and {$m->kind} has none");
                 };
 
-                $out->append(Format::zoneField($t, $o, $m));
+                $w->text(Format::zoneField($t, $o, $m));
             }
+        }
+
+        return $w->finish();
+    }
+
+    // RFC 3339: the signed year, the fraction only when there is one, Z for UTC
+    private const function stamp(const Moment& $m) : string
+    {
+        Date $d = guard $m->date else {
+            die("calendar: the pattern '{$this->pattern}' needs a date, and {$m->kind} has none");
+        };
+
+        Time $t = guard $m->time else {
+            die("calendar: the pattern '{$this->pattern}' needs a time of day, and {$m->kind} has none");
+        };
+
+        Offset $o = guard $m->offset else {
+            die("calendar: the pattern '{$this->pattern}' needs a zone, and {$m->kind} has none");
+        };
+
+        string $out = str::from($d);
+        $out->append('T');
+        $out->append(str::from($t));
+
+        if ($o->seconds == 0) {
+            $out->append('Z');
+        } else {
+            $out->append($o->text(true, false));
         }
 
         return $out;
     }
 
-    private const function dateField(const Token& $t, const Date& $d, Locale $names) : string
+    private const function dateField(Writer& $w, const Token& $t, const Date& $d) : void
     {
         Letter $l = $t->letter;
         int32 $n = $t->count;
         int64 $year = $d->year as int64;
+        const Locale& $names = $this->names;
 
-        if ($l == Letter::era) {
-            usize $era = 1;
+        if ($l == Letter::day) {
+            $w->number($d->day as int64, $n as usize);
+            return;
+        }
 
-            if ($year <= 0) {
-                $era = 0;
+        if ($l == Letter::month || $l == Letter::monthAlone) {
+            if ($n >= 3) {
+                $w->text($names->monthNames($n, $l == Letter::monthAlone)[($d->month->number() - 1) as usize]);
+                return;
             }
 
-            if ($n == 4) {
-                return $names->erasWide[$era];
-            }
-
-            return $names->eras[$era];
+            $w->number($d->month->number() as int64, $n as usize);
+            return;
         }
 
         if ($l == Letter::year) {
@@ -396,84 +503,118 @@ public class Format
                 $ofEra = 1 - $year;
             }
 
-            return Format::year($ofEra, $n);
+            Format::year($w, $ofEra, $n);
+            return;
+        }
+
+        if ($l == Letter::era) {
+            usize $era = 1;
+
+            if ($year <= 0) {
+                $era = 0;
+            }
+
+            if ($n == 4) {
+                $w->text($names->erasWide[$era]);
+                return;
+            }
+
+            $w->text($names->eras[$era]);
+            return;
         }
 
         if ($l == Letter::signedYear) {
-            return pad($year, $n as usize);
+            $w->number($year, $n as usize);
+            return;
         }
 
         if ($l == Letter::weekYear) {
-            return Format::year($d->week($this->rule)->year as int64, $n);
+            Format::year($w, $d->week($this->rule)->year as int64, $n);
+            return;
         }
 
         if ($l == Letter::quarter || $l == Letter::quarterAlone) {
             int64 $q = $d->quarter() as int64;
 
-            if ($n >= 4) {
-                return $names->quarters[($q - 1) as usize];
+            // QQQQQ is the narrow form, which for a quarter is its number
+            if ($n == 4) {
+                $w->text($names->quarters[($q - 1) as usize]);
+                return;
             }
 
             if ($n == 3) {
-                return $names->quartersShort[($q - 1) as usize];
+                $w->text($names->quartersShort[($q - 1) as usize]);
+                return;
             }
 
-            return pad($q, $n as usize);
-        }
-
-        if ($l == Letter::month || $l == Letter::monthAlone) {
-            if ($n >= 3) {
-                return $names->monthNames($n, $l == Letter::monthAlone)[($d->month->number() - 1) as usize];
+            if ($n == 5) {
+                $w->number($q, 1);
+                return;
             }
 
-            return pad($d->month->number() as int64, $n as usize);
+            $w->number($q, $n as usize);
+            return;
         }
 
         if ($l == Letter::week) {
-            return pad($d->week($this->rule)->number as int64, $n as usize);
-        }
-
-        if ($l == Letter::day) {
-            return pad($d->day as int64, $n as usize);
+            $w->number($d->week($this->rule)->number as int64, $n as usize);
+            return;
         }
 
         if ($l == Letter::dayOfYear) {
-            return pad($d->ordinal() as int64, $n as usize);
+            $w->number($d->ordinal() as int64, $n as usize);
+            return;
         }
 
         // E, e, c
         if (($l == Letter::localWeekday || $l == Letter::localWeekdayAlone) && $n <= 2) {
             int64 $local = $this->rule->firstDay->until($d->weekday()) + 1;
-            return pad($local, $n as usize);
+            $w->number($local, $n as usize);
+            return;
         }
 
-        return $names->weekdayNames($n)[($d->weekday()->number() - 1) as usize];
+        $w->text($names->weekdayNames($n)[($d->weekday()->number() - 1) as usize]);
     }
 
-    private static function timeField(const Token& $t, const Time& $time, Locale $names) : string
+    private static function timeField(Writer& $w, const Token& $t, const Time& $time, const Locale& $names) : void
     {
         Letter $l = $t->letter;
         usize $n = $t->count as usize;
         int64 $hour = $time->hour as int64;
 
-        if ($l == Letter::dayPeriod) {
-            if ($hour < 12) {
-                return $names->dayPeriods[0];
-            }
-
-            return $names->dayPeriods[1];
+        if ($l == Letter::hour) {
+            $w->number($hour, $n);
+            return;
         }
 
-        if ($l == Letter::hour) {
-            return pad($hour, $n);
+        if ($l == Letter::minute) {
+            $w->number($time->minute as int64, $n);
+            return;
+        }
+
+        if ($l == Letter::second) {
+            $w->number($time->second as int64, $n);
+            return;
+        }
+
+        if ($l == Letter::dayPeriod) {
+            if ($hour < 12) {
+                $w->text($names->dayPeriods[0]);
+                return;
+            }
+
+            $w->text($names->dayPeriods[1]);
+            return;
         }
 
         if ($l == Letter::hour24) {
             if ($hour == 0) {
-                return pad(24, $n);
+                $w->number(24, $n);
+                return;
             }
 
-            return pad($hour, $n);
+            $w->number($hour, $n);
+            return;
         }
 
         if ($l == Letter::hour12) {
@@ -483,24 +624,23 @@ public class Format
                 $h = 12;
             }
 
-            return pad($h, $n);
+            $w->number($h, $n);
+            return;
         }
 
         if ($l == Letter::hour11) {
-            return pad($hour % 12, $n);
-        }
-
-        if ($l == Letter::minute) {
-            return pad($time->minute as int64, $n);
-        }
-
-        if ($l == Letter::second) {
-            return pad($time->second as int64, $n);
+            $w->number($hour % 12, $n);
+            return;
         }
 
         // S: the leading digits of the nine-digit fraction
-        string $digits = pad($time->nanosecond as int64, 9);
-        return string::from($digits->sub(0, $n));
+        int64 $nanos = $time->nanosecond as int64;
+        int64 $scale = 100000000;
+
+        for (usize $i = 0; $i < $n; $i++) {
+            $w->push((48 + ($nanos / $scale) % 10) as uint8);
+            $scale = $scale / 10;
+        }
     }
 
     private static function zoneField(const Token& $t, const Offset& $o, const Moment& $m) : string
@@ -580,12 +720,13 @@ public class Format
         return $o->text(true, $n != 3);
     }
 
-    private static function year(int64 $year, int32 $count) : string
+    private static function year(Writer& $w, int64 $year, int32 $count) : void
     {
         if ($count == 2) {
-            return pad(floorMod($year, 100), 2);
+            $w->number(floorMod($year, 100), 2);
+            return;
         }
 
-        return pad($year, $count as usize);
+        $w->number($year, $count as usize);
     }
 }

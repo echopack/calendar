@@ -1,14 +1,20 @@
 namespace calendar;
 
 /**
- * Where zone rules come from. `SystemZones` reads the operating system's zone files; a
- * package that ships its own copy implements this too, and a `Calendar` takes whichever you
- * give it.
+ * Where named zones come from.
+ *
+ * `SystemZones` reads compiled zone files from a directory: the operating system's by
+ * default, or any other, such as a copy shipped next to the app, with `SystemZones(dir)`. A
+ * custom source can wrap another one to filter, alias or cache names.
+ *
+ * `Zone(named:)` and `Zone::named` always read the system source. A `Calendar` (its `zone`
+ * and `parse`) and `Zoned::parse($text, $zones)` use the source you give them.
  */
 public interface ZoneSource
 {
     /**
-     * The zone named `$id`, an IANA name such as `Europe/Zurich`.
+     * The zone named `$id`, an IANA name such as `Europe/Zurich`. A name the source does not
+     * know is `ZoneError::unknown`.
      */
     function load(const string& $id) : result<Zone, ZoneError>;
 
