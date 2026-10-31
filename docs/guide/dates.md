@@ -80,14 +80,16 @@ echo $launch->epochDay();        // 20539
 
 ### Which weekday is it?
 
-`weekday()` returns a [](api:calendar::Weekday). To print it, ask a [locale](./locales.md) for its name, or use a pattern:
+`weekday()` returns a [](api:calendar::Weekday). In a string it prints its English name. For another language, ask a [locale](./locales.md), or use a pattern:
 
 ```echo
 $launch = Date(2026, .march, 27);
+$day = $launch->weekday();
 
-echo $launch->weekday()->number();             // 5
-echo Locale::en()->weekday($launch->weekday()); // Friday
-echo $launch->format('EEEE');                  // Friday
+echo $day->number();                 // 5
+echo "{$day}";                       // Friday
+echo Locale::de()->weekday($day);    // Freitag
+echo $launch->format('EEEE');        // Friday
 ```
 
 Weekdays are numbered the ISO way, Monday is 1 and Sunday is 7.
@@ -159,7 +161,7 @@ There is a lot to say about what "one month later" means, so it has its own page
 
 ## Months and weekdays
 
-[](api:calendar::Month) and [](api:calendar::Weekday) are enums with a few helpers of their own. They are handy when you need to do something per month, or cycle through the week:
+[](api:calendar::Month) and [](api:calendar::Weekday) are enums with a few helpers of their own. They are handy when you need to do something per month, or cycle through the week. In a string, both print their English name, so `"{$month}"` is `March`:
 
 ```echo
 echo Month::february->days(2028);          // 29

@@ -50,7 +50,8 @@ public enum FormatError
     case minuteWithoutHour(usize $at);
 
     /**
-     * A 12-hour `h` or `K` without the AM/PM `a`, which leaves morning and evening the same.
+     * A 12-hour `$letter`, `h` or `K`, without the AM/PM `a`, which leaves morning and evening
+     * the same.
      */
-    case hourWithoutPeriod(usize $at);
+    case hourWithoutPeriod(string $letter, usize $at);
 }

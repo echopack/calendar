@@ -63,7 +63,7 @@ public class Calendar
      * The current instant in this calendar's zone.
      */
     #[docs::group: "Now"]
-    public function now() : Zoned
+    public const function now() : Zoned
     {
         return Zoned($this->clock->now(), $this->zone);
     }
@@ -72,7 +72,7 @@ public class Calendar
      * Today's date in this calendar's zone.
      */
     #[docs::group: "Now"]
-    public function today() : Date
+    public const function today() : Date
     {
         return $this->now()->date;
     }
@@ -81,7 +81,7 @@ public class Calendar
      * The week `$date` falls in under this calendar's week rule.
      */
     #[docs::group: "Now"]
-    public function week(const Date& $date) : Week
+    public const function week(const Date& $date) : Week
     {
         return $date->week($this->weekRule);
     }
@@ -108,7 +108,7 @@ public class Calendar
      * A wall clock in this calendar's zone, DST resolved compatibly.
      */
     #[docs::group: "Zones"]
-    public function at(const DateTime& $local) : Zoned
+    public const function at(const DateTime& $local) : Zoned
     {
         return $local->at($this->zone);
     }
@@ -147,25 +147,25 @@ public class Calendar
      * the program.
      */
     #[docs::group: "Format and parse"]
-    public function format(const Date& $date, const string& $pattern) : string
+    public const function format(const Date& $date, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($date);
     }
 
     #[docs::group: "Format and parse"]
-    public function format(const Time& $time, const string& $pattern) : string
+    public const function format(const Time& $time, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($time);
     }
 
     #[docs::group: "Format and parse"]
-    public function format(const DateTime& $dt, const string& $pattern) : string
+    public const function format(const DateTime& $dt, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($dt);
     }
 
     #[docs::group: "Format and parse"]
-    public function format(const Zoned& $z, const string& $pattern) : string
+    public const function format(const Zoned& $z, const string& $pattern) : string
     {
         return $this->compile($pattern)->render($z);
     }
@@ -174,25 +174,25 @@ public class Calendar
      * Render with a compiled format, which keeps its own language and week rule.
      */
     #[docs::group: "Format and parse"]
-    public function format(const Date& $date, const Format& $format) : string
+    public const function format(const Date& $date, const Format& $format) : string
     {
         return $format->render($date);
     }
 
     #[docs::group: "Format and parse"]
-    public function format(const Time& $time, const Format& $format) : string
+    public const function format(const Time& $time, const Format& $format) : string
     {
         return $format->render($time);
     }
 
     #[docs::group: "Format and parse"]
-    public function format(const DateTime& $dt, const Format& $format) : string
+    public const function format(const DateTime& $dt, const Format& $format) : string
     {
         return $format->render($dt);
     }
 
     #[docs::group: "Format and parse"]
-    public function format(const Zoned& $z, const Format& $format) : string
+    public const function format(const Zoned& $z, const Format& $format) : string
     {
         return $format->render($z);
     }
@@ -202,7 +202,7 @@ public class Calendar
      * "yesterday".
      */
     #[docs::group: "Human"]
-    public function human(const Zoned& $then, Relative $style = Relative()) : string
+    public const function human(const Zoned& $then, Relative $style = Relative()) : string
     {
         return $style->render($then, $this->now(), $this->locale);
     }
@@ -211,13 +211,13 @@ public class Calendar
      * How far the day `$then` is from today: "tomorrow", "in 3 weeks".
      */
     #[docs::group: "Human"]
-    public function human(const Date& $then, Relative $style = Relative()) : string
+    public const function human(const Date& $then, Relative $style = Relative()) : string
     {
         return $style->render($then, $this->today(), $this->locale);
     }
 
     // a pattern string in this calendar's language and week rule
-    private function compile(const string& $pattern) : Format
+    private const function compile(const string& $pattern) : Format
     {
         return Format($pattern)->locale($this->locale)->weeks($this->weekRule);
     }

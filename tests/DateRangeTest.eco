@@ -186,3 +186,28 @@ test range_spans_of_every_unit
     assert($d->span(.hour) == DateRange(from: $d, through: $d));
     assert(str::from($d->span(.month)) == '[2026-05-01, 2026-06-01)');
 }
+
+test steps_and_cursors_check_their_bounds
+{
+    // equal start and end make no dates; an end before the start or a step that does not
+    // move forward stops the program, so only the working paths are checked here
+    $day = Date(2026, .march, 27);
+    int32 $none = 0;
+
+    foreach (calendar::DateSteps($day, $day, Period::days(1)) as const &$d) {
+        $none = $none + 1;
+    }
+
+    assert($none == 0);
+
+    $cursor = calendar::DateCursor($day, Date(2026, .april, 1), Period::days(2));
+    string $seen = '';
+
+    while ($cursor->advance()) {
+        Date $d = $cursor->current();
+        $seen->append(str::from($d));
+        $seen->append(' ');
+    }
+
+    assert($seen == '2026-03-27 2026-03-29 2026-03-31 ');
+}

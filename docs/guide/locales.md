@@ -30,11 +30,11 @@ When the language comes from a user setting or an `Accept-Language` header, `Loc
 $swissGerman = Locale::of('de-CH') ?? Locale::en();
 $spanish = Locale::of('es') ?? Locale::en();
 
-echo $swissGerman->id;           // de
+echo $swissGerman->id;           // de-CH
 echo $spanish->id;               // en
 ```
 
-The region only matters for English, where it decides the week rule, described below. Everything else about a language is the same in every region.
+The region only matters for English, where it decides the week rule, described below. Everything else about a language is the same in every region. The id still keeps the region, written the standard way (`en_gb` becomes `en-GB`), so two locales that count weeks differently never share an id.
 
 ## Where a locale is used
 
@@ -104,7 +104,7 @@ echo Locale::fr()->count(2, .day);   // 2 jours
 
 A locale is plain data, so you may build one for any language with its field names. Arrays run January to December and Monday to Sunday. The unit words come in pairs, singular then plural, for year, month, week, day, hour, minute and second. The relative phrases come in fours per unit, with `#` where the number goes: future singular, future plural, past singular, past plural.
 
-Here is a complete Spanish locale. It looks long, but it's just lists of words. Writing each list into a typed variable first keeps it readable, and it is the way the built-in locales are written too:
+Here is a complete Spanish locale. It looks long, but it's just lists of words. Each list goes into a typed variable first. That keeps it readable, and it is also required for now: echoc 0.11.5 refuses a list written directly in the `Locale(...)` call. The built-in locales are written the same way:
 
 ```echo
 array<string> $months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];

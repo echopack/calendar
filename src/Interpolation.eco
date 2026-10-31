@@ -1,6 +1,7 @@
 /**
- * `str::from` for the library's values, so `"{$date}"` works. Each type renders its ISO 8601
- * form, which also parses back.
+ * `str::from` for the library's values, so `"{$date}"` works. Dates, times, periods and the
+ * rest render their ISO 8601 form, which also parses back. Months and weekdays render their
+ * English name and a zone its id.
  */
 
 namespace str;
@@ -183,6 +184,30 @@ private function invalidAt(calendar::Field $field, int64 $value, uint64 $at) : s
 }
 
 /**
+ * The English name, `March`. `Locale::month` gives it in another language.
+ */
+public function from(Month $m) : string
+{
+    return calendar::Locale::en()->month($m);
+}
+
+/**
+ * The English name, `Friday`. `Locale::weekday` gives it in another language.
+ */
+public function from(Weekday $d) : string
+{
+    return calendar::Locale::en()->weekday($d);
+}
+
+/**
+ * The zone's id, `Europe/Zurich`, `+05:30` or `UTC`.
+ */
+public function from(const calendar::Zone& $z) : string
+{
+    return $z->id;
+}
+
+/**
  * The offset with a colon, `+01:00`; seconds only when there are some, `+00:34:08`.
  */
 public function from(const calendar::Offset& $o) : string
@@ -239,7 +264,7 @@ public function from(const calendar::FormatError& $e) : string
         calendar::FormatError::weekWithoutWeekYear($at) => concat("'w' counts weeks of the week-based year; pair it with 'Y', not 'y', at byte ", from($at as uint64)),
         calendar::FormatError::dayOfYearWithMonth($at) => concat("'D' is the day of the year; did you mean 'd'? at byte ", from($at as uint64)),
         calendar::FormatError::minuteWithoutHour($at) => concat("'m' is minutes and the pattern has no hour; did you mean 'M'? at byte ", from($at as uint64)),
-        calendar::FormatError::hourWithoutPeriod($at) => concat("'h' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte ", from($at as uint64)),
+        calendar::FormatError::hourWithoutPeriod($letter, $at) => concat("'{$letter}' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte ", from($at as uint64)),
     };
 }
 

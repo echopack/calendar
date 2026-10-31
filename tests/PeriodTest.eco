@@ -90,13 +90,15 @@ test period_parse_more
     Period $big = guard Period::parse('P999999999999999999D');
     assert($big->days == 999999999999999999);
 
-    assert(str::from(Period::parse('P1H')->failure()) == 'expected a unit designator in order at byte 2');
-    assert(str::from(Period::parse('PT1D')->failure()) == 'expected a unit designator in order at byte 3');
+    assert(str::from(Period::parse('P1H')->failure()) == "expected a 'T' before the clock fields at byte 2");
+    assert(str::from(Period::parse('PT1D')->failure()) == 'expected a unit designator (H, M or S) at byte 3');
     assert(str::from(Period::parse('PT1.5M')->failure()) == 'expected a fraction only on seconds at byte 2');
     assert(str::from(Period::parse('P1DT')->failure()) == 'expected a clock field after T at byte 4');
     assert(str::from(Period::parse('P1Y1Y')->failure()) == 'expected a unit designator in order at byte 4');
     assert(str::from(Period::parse('PD')->failure()) == 'expected a number at byte 1');
-    assert(str::from(Period::parse('P1')->failure()) == 'expected a unit designator in order at byte 2');
+    assert(str::from(Period::parse('P1')->failure()) == 'expected a unit designator (Y, M, W or D) at byte 2');
+    assert(str::from(Period::parse('P3X')->failure()) == 'expected a unit designator (Y, M, W or D) at byte 2');
+    assert(str::from(Period::parse('P1D1Y')->failure()) == 'expected a unit designator in order at byte 4');
     assert(str::from(Period::parse('-P-1D')->failure()) == 'expected no field sign after a leading one at byte 2');
     assert(Period::parse('P1DT1HT1M')->failed());
     assert(Period::parse('P9999999999999999999D')->failed());

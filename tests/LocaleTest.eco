@@ -3,16 +3,28 @@ use calendar::{Locale, Date, Month, Weekday, WeekRule, Unit, Plural, Period, For
 test locale_of_tags
 {
     array<string> $german = ['de', 'DE', 'de-CH', 'de_AT', 'De-de'];
+    array<string> $ids = ['de', 'de', 'de-CH', 'de-AT', 'de-DE'];
 
-    foreach ($german as const &$tag) {
+    foreach ($german as $i => const &$tag) {
         Locale $l = guard Locale::of($tag);
-        assert($l->id == 'de');
+        assert($l->id == $ids[$i]);
+        assert($l->month(.march) == 'März');
     }
 
     Locale $fr = guard Locale::of('fr-CH');
-    assert($fr->id == 'fr');
+    assert($fr->id == 'fr-CH');
     Locale $it = guard Locale::of('it_CH');
-    assert($it->id == 'it');
+    assert($it->id == 'it-CH');
+
+    // the region stays in the id, so locales with different week rules never share one
+    Locale $gb = guard Locale::of('en_gb');
+    assert($gb->id == 'en-GB');
+    assert($gb->weekRule->firstDay != Locale::en()->weekRule->firstDay);
+    assert(Locale::en()->id == 'en');
+    Locale $en = guard Locale::of('en');
+    assert($en->id == 'en');
+    Locale $usId = guard Locale::of('en-us');
+    assert($usId->id == 'en-US');
 
     // English counts its weeks the American way only in the United States
     Locale $us = guard Locale::of('en-US');

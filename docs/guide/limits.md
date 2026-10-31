@@ -12,7 +12,6 @@ This library tries to do the common things with dates really well. A few things 
 - **Zone sources for `Zone::named`.** `Zone(named: ...)` and `Zone::named` always read from the system source. A custom [](api:calendar::ZoneSource) is used by `Calendar->zone` and `Calendar->parse`, and by `Zoned::parse` when you pass it in.
 - **Other calendars.** Dates are Gregorian, extended backwards to the year -9999 ("proleptic"). There is no Julian, Hebrew, Islamic or Japanese calendar.
 - **More languages.** English, German, French and Italian are built in. You may [build your own](./locales.md#building-your-own-locale) for any other language.
-- **Printing enums directly.** [](api:calendar::Month), [](api:calendar::Weekday) and [](api:calendar::Zone) don't interpolate into strings. Use `->number()`, a [locale](./locales.md#asking-a-locale-for-words), or `$zone->id`.
 - **Parsing a week.** A [](api:calendar::Week) prints as `2026-W13`, but there is no `Week::parse`. Parse a date with a `YYYY-'W'ww-e` pattern instead.
 - **Localized interpolation.** `"{$date:dd MMMM}"` always uses English names. Use `format` with a locale when the language matters.
 

@@ -82,7 +82,7 @@ test format_locales
     $cal = Calendar($zone: Zone::utc(), $locale: Locale::de(), $clock: FixedClock(time::timestamp::from_unix_secs(0)));
     assert(str::from($cal->format($d, 'd. MMMM')) == '4. März');
     Locale $ch = guard Locale::of('de-CH');
-    assert($ch->id == 'de');
+    assert($ch->id == 'de-CH');
     Locale $gb = guard Locale::of('en_GB');
     assert($gb->weekRule->firstDay == calendar::Weekday::monday);
     assert(Locale::of('nl') == null);
@@ -208,7 +208,7 @@ test format_pattern_errors
     assert(str::from(Format::of('')->failure()) == 'the pattern is empty');
     assert(str::from(Format::of("yyyy 'x")->failure()) == 'a quote is never closed, from byte 5');
     assert(str::from(Format::of('yyyy-MM-dd J')->failure()) == "'J' is not a pattern letter; quote literal text like 'this', at byte 11");
-    assert(str::from(Format::of('KK:mm')->failure()) == "'h' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte 0");
+    assert(str::from(Format::of('KK:mm')->failure()) == "'K' is a 12-hour clock and the pattern has no AM/PM 'a'; did you mean 'H'? at byte 0");
 
     // literal text: quotes, doubled quotes, and anything that is not a letter
     Format $f = guard Format::of("'Tag' d. 'im' MMMM, 'o''clock' HH");

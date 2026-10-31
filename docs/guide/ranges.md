@@ -84,7 +84,7 @@ foreach ($quarter->every(Period::weeks(2)) as $sprint => const &$start) {
 }
 ```
 
-The step must move forward. A zero or negative period would loop forever, so it stops the program instead.
+The step must move forward. A zero or negative period would loop forever, so it stops the program instead. The same goes for building `DateSteps` or a `DateCursor` yourself: the step has to move forward and the end can't come before the start.
 
 ### Comparing ranges
 

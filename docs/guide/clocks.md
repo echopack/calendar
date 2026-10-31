@@ -77,6 +77,8 @@ Notice that advancing 48 hours from Friday 09:30 lands on Sunday at 10:30. The c
 
 The calendar holds on to the same clock object, so `advance` and `set` take effect immediately, with no need to build a new calendar.
 
+Threads may share one `ManualClock`: a server under test can run its workers on it while the test moves it. It keeps the instant as a single count of nanoseconds since 1970, so a read never sees half a move, and that count runs out in the year 2262.
+
 ## Your own clock
 
 `Clock` is an interface, so you may implement it yourself, for example to read the time from a trusted server or to replay a log at high speed. It needs one method:

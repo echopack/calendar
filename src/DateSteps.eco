@@ -22,16 +22,13 @@ public struct DateSteps : contract::iterable<Date>, contract::const_iterable<Dat
     public const Period $step;
 
     /**
-     * The dates from `$start`, `$step` apart, before `$end`. A step that does not move forward,
-     * or that has hours, minutes or seconds, stops the program.
+     * The dates from `$start`, `$step` apart, before `$end`. Equal dates give none. A step that
+     * does not move forward or has hours, minutes or seconds, or an end before the start, stops
+     * the program.
      */
     constructor(Date $start, Date $end, Period $step)
     {
-        Date::dated($step);
-
-        if ($step->totalMonths() < 0 || $step->totalDays() < 0 || ($step->totalMonths() == 0 && $step->totalDays() == 0)) {
-            die('calendar: a date step has to move forward');
-        }
+        DateCursor::check($start, $end, $step);
 
         $this->start = $start;
         $this->end = $end;

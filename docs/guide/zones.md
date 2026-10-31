@@ -43,6 +43,8 @@ echo $brasilia->id;              // -03:00
 echo "{$india->fixed()}";        // true
 ```
 
+An offset of zero is the one exception: `Zone(offset: Offset::utc())` is UTC itself, with the id `UTC`, so the same instant in it and in `Zone::utc()` is `==`.
+
 A fixed zone has no DST. It is the right choice for data that only ever carried an offset, and the wrong one for a place, because places change their rules. Whenever you know the place, prefer its name.
 
 An [](api:calendar::Offset) itself may be written as `Offset(3600)` in seconds, `Offset(hours: 1)`, or parsed with `Offset::parse`, which accepts `Z`, `+01:00`, `+0100` and `+01`.
@@ -55,7 +57,17 @@ An [](api:calendar::Offset) itself may be written as `Offset(3600)` in seconds, 
 2. The zone that `/etc/localtime` points at.
 3. UTC, when neither tells it anything.
 
-`Calendar()` uses it as its default zone. On a server, you may prefer to name the zone explicitly, so that your program behaves the same wherever it runs.
+A `TZ` that names nothing usable also gives UTC, without a word. That keeps `Zone::local()` from ever failing, but it also hides a typo like `TZ=Europe/Zurch`. When you'd like to catch that, ask `Zone::env()`, which reads `TZ` the same way and returns an error instead. It is null when `TZ` isn't set at all:
+
+```echo
+Zone? $fromTz = guard Zone::env() else ($e) {
+    die("TZ is set, but {$e}");
+};
+
+Zone $here = $fromTz ?? Zone::local();
+```
+
+`Calendar()` uses `Zone::local()` as its default zone. On a server, you may prefer to name the zone explicitly, so that your program behaves the same wherever it runs.
 
 ## Where the rules come from
 

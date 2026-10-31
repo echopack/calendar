@@ -402,7 +402,7 @@ public class Format
         }
 
         if ($twelveAt < $pattern->size() && !$period) {
-            return .error(.hourWithoutPeriod($twelveAt));
+            return .error(.hourWithoutPeriod(string::from($pattern->sub($twelveAt, 1)), $twelveAt));
         }
 
         return .ok;

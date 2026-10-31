@@ -1,0 +1,33 @@
+use calendar::{ManualClock};
+use std::time;
+use std::thread;
+
+test manual_clock_moves_both_ways
+{
+    $clock = ManualClock(time::timestamp::from_unix_secs(1793176200) + time::duration::millis(250));
+    assert($clock->now()->unix_millis() == 1793176200250);
+    $clock->advance(time::duration::secs(60));
+    assert($clock->now()->unix_secs() == 1793176260);
+    $clock->advance(-time::duration::secs(120));
+    assert($clock->now()->unix_secs() == 1793176140);
+    $clock->set(time::timestamp::from_unix_secs(-5));
+    assert($clock->now()->unix_secs() == -5);
+}
+
+test manual_clock_is_shared_across_threads
+{
+    $clock = ManualClock(time::timestamp::from_unix_secs(0));
+    array<thread::handle> $workers = array<thread::handle>();
+    foreach (0 .. 4 as $i) {
+        thread::handle $h = guard thread::spawn(function() : void {
+            foreach (0 .. 1000 as $j) {
+                $clock->advance(time::duration::secs(1));
+            }
+        });
+        $workers->push($h);
+    }
+    foreach ($workers as &$w) {
+        $w->join();
+    }
+    assert($clock->now()->unix_secs() == 4000);
+}

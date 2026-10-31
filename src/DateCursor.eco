@@ -13,16 +13,32 @@ public struct DateCursor : contract::iterator<Date>, contract::keyed<usize>
     private int64 $produced;
 
     /**
-     * A cursor before the first date. Nothing checks the step here, so prefer `foreach` over a
-     * `DateRange` or `DateSteps`, which refuse a step that would never reach `$end`.
+     * A cursor before the first date. A step that does not move forward or has hours, minutes
+     * or seconds, or an end before the start, stops the program, as `DateSteps` does.
      */
     constructor(Date $start, Date $end, Period $step)
     {
+        DateCursor::check($start, $end, $step);
+
         $this->start = $start;
         $this->end = $end;
         $this->step = $step;
         $this->value = $start;
         $this->produced = 0;
+    }
+
+    // a step that never reaches $end, or an end before the start, is a bug in the caller
+    internal static function check(const Date& $start, const Date& $end, const Period& $step) : void
+    {
+        Date::dated($step);
+
+        if ($step->totalMonths() < 0 || $step->totalDays() < 0 || ($step->totalMonths() == 0 && $step->totalDays() == 0)) {
+            die('calendar: a date step has to move forward');
+        }
+
+        if ($end < $start) {
+            die('calendar: date steps cannot end before they start');
+        }
     }
 
     /**

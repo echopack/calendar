@@ -28,7 +28,8 @@ public class Zone
 {
     /**
      * The zone's name: the IANA id for a named zone (`Europe/Zurich`), the offset text for a
-     * fixed one (`+05:30`), `UTC` for `Zone::utc()`. `Zoned`'s `==` compares zones by it.
+     * fixed one (`+05:30`), `UTC` for `Zone::utc()` and for a fixed zone at offset zero.
+     * `Zoned`'s `==` compares zones by it.
      */
     public const string $id;
     private array<int64> $times;
@@ -149,14 +150,22 @@ public class Zone
     }
 
     /**
-     * A zone that is always `$offset`. Its id is the offset text, `+05:30`.
+     * A zone that is always `$offset`. Its id is the offset text, `+05:30`, except at offset
+     * zero, which is UTC: the same id and abbreviation as `Zone::utc()`, so a `Zoned` in either
+     * is `==`.
      */
     constructor(offset: Offset $offset)
     {
-        $this->id = str::from($offset);
+        string $name = str::from($offset);
+
+        if ($offset->seconds == 0) {
+            $name = 'UTC';
+        }
+
+        $this->id = $name;
         $this->times = [];
         $this->kinds = [];
-        $this->types = [ZoneType($offset->seconds, false, str::from($offset))];
+        $this->types = [ZoneType($offset->seconds, false, $name)];
         $this->rule = null;
         $this->offsets = [];
         $this->initial = $offset->seconds;
@@ -202,8 +211,8 @@ public class Zone
     }
 
     /**
-     * UTC, offset zero forever, without reading any zone file. Its id is `UTC`; a fixed
-     * `Zone(offset: Offset::utc())` is `+00:00`.
+     * UTC, offset zero forever, without reading any zone file. Its id is `UTC`, and so is the
+     * id of a fixed `Zone(offset: Offset::utc())`.
      */
     public static function utc() : Zone
     {
@@ -222,56 +231,101 @@ public class Zone
     /**
      * The zone this machine runs in, the default for a `Calendar`.
      *
-     * `$TZ` comes first when it is set, with a leading `:` stripped: an absolute path to a
-     * zone file, a zone name, or a POSIX rule string such as `CET-1CEST,M3.5.0,M10.5.0/3`. An
-     * empty or unusable `$TZ` gives UTC. Without `$TZ`, the zone `/etc/localtime` points at,
-     * and UTC when that cannot be read. Never fails.
-     *
-     * A zone file found under a `zoneinfo` directory takes its name from the path; one that
-     * is not is named `localtime`. A POSIX rule is named after the rule text.
+     * `$TZ` comes first when it is set, read as `Zone::env()` reads it. When `$TZ` names
+     * nothing usable this gives UTC without saying so; call `Zone::env()` to report that.
+     * Without `$TZ`, the zone `/etc/localtime` points at, and UTC when that cannot be read.
+     * Never fails.
      */
     public static function local() : Zone
     {
-        string::view? $tz = std::env::var('TZ');
+        result<Zone?, ZoneError> $env = Zone::env();
 
-        if ($tz != null) {
-            string::view $view = guard $tz;
-            string $name = string::from($view);
-
-            if ($name->starts(':')) {
-                $name = string::from($name->sub(1, $name->size() - 1));
-            }
-
-            if ($name->empty()) {
-                return Zone::utc();
-            }
-
-            if ($name->starts('/')) {
-                return Zone::file($name) ?? Zone::utc();
-            }
-
-            result<Zone, ZoneError> $named = Zone::named($name);
-
-            if ($named->has_value()) {
-                Zone $z = guard $named;
-                return $z;
-            }
-
-            PosixRule? $rule = PosixRule::parse($name);
-
-            if ($rule != null) {
-                PosixRule $r = guard $rule;
-                return Zone($name, [], [], [$r->standard], $r);
-            }
-
+        if (!$env->has_value()) {
             return Zone::utc();
         }
 
-        return Zone::file('/etc/localtime') ?? Zone::utc();
+        Zone? $set = guard $env;
+
+        if ($set != null) {
+            Zone $z = guard $set;
+            return $z;
+        }
+
+        Zone $found = guard Zone::file('/etc/localtime') else {
+            return Zone::utc();
+        };
+
+        return $found;
+    }
+
+    /**
+     * The zone `$TZ` asks for, or null when `$TZ` is not set.
+     *
+     * A leading `:` is stripped, then the value is an absolute path to a zone file, a zone
+     * name, or a POSIX rule string such as `CET-1CEST,M3.5.0,M10.5.0/3`. Empty means UTC. A
+     * value that is none of these is `ZoneError::unknown`; a zone file that cannot be read or
+     * parsed is `unreadable` or `corrupt`.
+     *
+     * A zone file found under a `zoneinfo` directory takes its name from the path; one that
+     * is not is named `localtime`. A POSIX rule is named after the rule text.
+     *
+     * ```echo
+     * Zone? $set = guard Zone::env() else ($e) {
+     *     die("TZ is set, but {$e}");
+     * };
+     * ```
+     */
+    public static function env() : result<Zone?, ZoneError>
+    {
+        string::view? $tz = std::env::var('TZ');
+
+        if ($tz == null) {
+            return .ok(null);
+        }
+
+        string::view $view = guard $tz;
+        Zone $z = guard Zone::env(string::from($view)) else ($e) {
+            return .error($e);
+        };
+
+        return .ok($z);
+    }
+
+    // the zone a $TZ value names
+    internal static function env(const string& $value) : result<Zone, ZoneError>
+    {
+        string $name = $value;
+
+        if ($name->starts(':')) {
+            $name = string::from($name->sub(1, $name->size() - 1));
+        }
+
+        if ($name->empty()) {
+            return .ok(Zone::utc());
+        }
+
+        if ($name->starts('/')) {
+            return Zone::file($name);
+        }
+
+        result<Zone, ZoneError> $named = Zone::named($name);
+
+        if ($named->has_value()) {
+            return $named;
+        }
+
+        PosixRule? $rule = PosixRule::parse($name);
+
+        if ($rule != null) {
+            PosixRule $r = guard $rule;
+            return .ok(Zone($name, [], [], [$r->standard], $r));
+        }
+
+        return .error(.unknown($name));
     }
 
     // a zone file at an absolute path, named after its place under a zoneinfo directory
-    private static function file(const string& $path) : Zone?
+    private static function file(const string& $path) : result<Zone, ZoneError>
     {
         string $id = 'localtime';
         string $real = $path;
@@ -289,20 +343,15 @@ public class Zone
             result<Zone, ZoneError> $named = Zone::named($id);
 
             if ($named->has_value()) {
-                Zone $z = guard $named;
-                return $z;
+                return $named;
             }
         }
 
-        string $bytes = guard std::io::readfile($real) else {
-            return null;
+        string $bytes = guard std::io::readfile($real) else ($e) {
+            return .error(.unreadable($path, $e->message()));
         };
 
-        Zone $parsed = guard Tzif::parse($id, $bytes) else {
-            return null;
-        };
-
-        return $parsed;
+        return Tzif::parse($id, $bytes);
     }
 
     /**

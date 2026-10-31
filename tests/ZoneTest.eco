@@ -113,3 +113,30 @@ test zone_from_a_literal_name
     assert($zurich->offset($at) == $loaded->offset($at));
     assert($zurich->abbreviation($at) == 'CET');
 }
+
+test zero_offset_is_utc
+{
+    $fixed = Zone(offset: Offset::utc());
+    assert($fixed->id == 'UTC');
+    assert($fixed->abbreviation(ts(0)) == 'UTC');
+    assert(Zone(offset: Offset(hours: 1))->id == '+01:00');
+
+    calendar::Zoned $a = calendar::Zoned(ts(1793176200), Zone::utc());
+    calendar::Zoned $b = calendar::Zoned(ts(1793176200), $fixed);
+    assert($a == $b);
+}
+
+test tz_values
+{
+    Zone $empty = guard Zone::env('');
+    assert($empty->id == 'UTC');
+    Zone $colon = guard Zone::env(':Europe/Zurich');
+    assert($colon->id == 'Europe/Zurich');
+    Zone $rule = guard Zone::env('CET-1CEST,M3.5.0,M10.5.0/3');
+    assert($rule->id == 'CET-1CEST,M3.5.0,M10.5.0/3');
+    Zone $path = guard Zone::env('/usr/share/zoneinfo/Asia/Tokyo');
+    assert($path->id == 'Asia/Tokyo');
+
+    assert(str::from(Zone::env('Europe/Zurch')->failure()) == "no time zone named 'Europe/Zurch'");
+    assert(Zone::env('/nonexistent/zone')->failed());
+}

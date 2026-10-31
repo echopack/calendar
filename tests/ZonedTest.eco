@@ -91,7 +91,8 @@ test zoned_parse
     assert($a->instant == time::timestamp::from_unix_secs(1793176200));
     Zoned $b = guard Zoned::parse('2026-10-28T08:30:00Z');
     assert($b->instant == $a->instant);
-    assert($b->zone->id == '+00:00');
+    assert($b->zone->id == 'UTC');
+    assert($b == $a->to(Zone::utc()));
     Zoned $c = guard Zoned::parse('2026-10-28T09:30[Europe/Zurich]');
     assert($c == $a);
     Zoned $d = guard Zoned::parse('2026-10-28T09:30:00+01:00[!Europe/Zurich][u-ca=iso8601]');
@@ -381,11 +382,19 @@ test clocks
     assert($system->now() >= time::timestamp::from_unix_secs(1767225600));
 }
 
+// only reads, so a const borrow is enough
+function stamp(const Calendar& $cal) : string
+{
+    Date $today = $cal->today();
+    return $cal->format($today, 'EEEE d.M.yyyy');
+}
+
 test calendar_context
 {
     $cal = Calendar($zone: zurich(), $locale: Locale::de(), $clock: FixedClock(time::timestamp::from_unix_secs(1793176200)));
     assert($cal->zone->id == 'Europe/Zurich');
     assert($cal->locale->id == 'de');
+    assert(stamp($cal) == 'Mittwoch 28.10.2026');
     assert($cal->weekRule->firstDay == Weekday::monday);
     assert(str::from($cal->at(DateTime(2026, .march, 29, 2, 30))) == '2026-03-29T03:30:00+02:00[Europe/Zurich]');
     assert(str::from($cal->zone('Nowhere/Atlantis')->failure()) == "no time zone named 'Nowhere/Atlantis'");

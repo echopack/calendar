@@ -314,6 +314,18 @@ public struct Period
             uint8 $u = $s->peek();
             int32 $slot = Period::slot($u, $clock);
 
+            if ($slot < 0 && $clock) {
+                return .error(.expected($s->at, 'a unit designator (H, M or S)'));
+            }
+
+            if ($slot < 0 && Period::slot($u, true) >= 0) {
+                return .error(.expected($s->at, "a 'T' before the clock fields"));
+            }
+
+            if ($slot < 0) {
+                return .error(.expected($s->at, 'a unit designator (Y, M, W or D)'));
+            }
+
             if ($slot <= $last) {
                 return .error(.expected($s->at, 'a unit designator in order'));
             }

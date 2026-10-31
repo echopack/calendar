@@ -150,12 +150,12 @@ Zoned $proper = guard Zoned::parse('Fri, 27 Mar 2026 09:30:00 +0100', Format::rf
 Zoned $sloppy = guard Zoned::parse('27 Mar 26 09:30 GMT', Format::rfc2822());
 
 echo "{$proper}";                // 2026-03-27T09:30:00+01:00[+01:00]
-echo "{$sloppy}";                // 2026-03-27T09:30:00+00:00[+00:00]
+echo "{$sloppy}";                // 2026-03-27T09:30:00+00:00[UTC]
 ```
 
 `Format::http()` reads the date format of HTTP headers such as `If-Modified-Since`.
 
-These presets give you a fixed-offset zone, since that is all the text says. Call `to` with a named zone when you'd like to show the result somewhere specific.
+These presets give you a fixed-offset zone, since that is all the text says. An offset of zero is `UTC`, the same zone `Zone::utc()` gives you. Call `to` with a named zone when you'd like to show the result somewhere specific.
 
 ## Handling refusals
 

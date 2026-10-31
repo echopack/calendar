@@ -127,4 +127,4 @@ $cal = Calendar($zone: Zone(named: 'Europe/Zurich'));
 $due = invoiceDue($cal);
 ```
 
-`Calendar` is a class, so passing it by value hands over a shared reference, not a copy. It feels like a little extra typing at first. The payoff comes the first time you write a test for `invoiceDue`: you hand it a calendar with a [fixed clock](./clocks.md), and the test passes on every machine, on every day of the year.
+`Calendar` is a class, so passing it by value hands over a shared reference, not a copy. Code that only reads the clock, formats or describes dates may take a `const Calendar&` instead. Loading zones and parsing need a writable calendar, because the zone source caches what it loads. It feels like a little extra typing at first. The payoff comes the first time you write a test for `invoiceDue`: you hand it a calendar with a [fixed clock](./clocks.md), and the test passes on every machine, on every day of the year.

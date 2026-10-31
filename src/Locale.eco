@@ -30,7 +30,8 @@ use std::math;
 public class Locale
 {
     /**
-     * The language code, such as `de`.
+     * The language code, such as `de`, with the region when `Locale::of` was given one:
+     * `de-CH`, `en-GB`.
      */
     public const string $id;
 
@@ -153,7 +154,7 @@ public class Locale
     }
 
     internal static Locale $english = englishLocale('en', WeekRule(.sunday, 1));
-    internal static Locale $englishIso = englishLocale('en', WeekRule::iso());
+    internal static Locale $englishIso = englishLocale('en-GB', WeekRule::iso());
     internal static Locale $german = germanLocale();
     internal static Locale $french = frenchLocale();
     internal static Locale $italian = italianLocale();
@@ -194,6 +195,9 @@ public class Locale
     /**
      * A built-in locale by tag: `de`, `de-CH`, `fr_CH`, `en-GB`. English outside the United
      * States gets the ISO week rule. Null for a language that is not built in.
+     *
+     * The id keeps the region, written the standard way: `of('en_gb')->id` is `en-GB`, so two
+     * locales with different week rules never share an id.
      */
     public static function of(const string& $tag) : Locale?
     {
@@ -205,27 +209,28 @@ public class Locale
             $lang = string::from($lang->sub(0, 2));
         }
 
+        Locale $base = Locale::$english;
+
         if ($lang == 'de') {
-            return Locale::$german;
-        }
-
-        if ($lang == 'fr') {
-            return Locale::$french;
-        }
-
-        if ($lang == 'it') {
-            return Locale::$italian;
-        }
-
-        if ($lang == 'en') {
-            if ($region->empty() || $region == 'us') {
-                return Locale::$english;
+            $base = Locale::$german;
+        } else if ($lang == 'fr') {
+            $base = Locale::$french;
+        } else if ($lang == 'it') {
+            $base = Locale::$italian;
+        } else if ($lang == 'en') {
+            if (!$region->empty() && $region != 'us') {
+                $base = Locale::$englishIso;
             }
-
-            return Locale::$englishIso;
+        } else {
+            return null;
         }
 
-        return null;
+        if ($region->empty()) {
+            return $base;
+        }
+
+        string $upper = str::upper($region);
+        return $base->named("{$lang}-{$upper}");
     }
 
     /**
@@ -323,6 +328,33 @@ public class Locale
         }
 
         return str::replace_first($this->relative[$i], '#', str::from(math::abs($n)));
+    }
+
+    // this locale under another id
+    private const function named(string $id) : Locale
+    {
+        return Locale(
+            $id: $id,
+            $months: $this->months,
+            $monthsShort: $this->monthsShort,
+            $monthsStandaloneShort: $this->monthsStandaloneShort,
+            $monthsNarrow: $this->monthsNarrow,
+            $weekdays: $this->weekdays,
+            $weekdaysShort: $this->weekdaysShort,
+            $weekdaysNarrow: $this->weekdaysNarrow,
+            $quarters: $this->quarters,
+            $quartersShort: $this->quartersShort,
+            $eras: $this->eras,
+            $erasWide: $this->erasWide,
+            $dayPeriods: $this->dayPeriods,
+            $weekRule: $this->weekRule,
+            $plural: $this->plural,
+            $units: $this->units,
+            $relative: $this->relative,
+            $nearDays: $this->nearDays,
+            $now: $this->now,
+            $and: $this->and,
+        );
     }
 
     private static function sized(const array<string>& $list, usize $want, const string& $name) : void

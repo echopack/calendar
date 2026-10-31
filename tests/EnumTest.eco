@@ -173,3 +173,14 @@ test field_labels
     assert(Field::nanosecond->label() == 'nanosecond');
     assert(Field::zone->label() == 'zone');
 }
+
+test enums_in_strings
+{
+    Month $m = .march;
+    Weekday $wd = .friday;
+    $zone = calendar::Zone(named: 'Europe/Zurich');
+    assert("{$m}" == 'March');
+    assert("{$wd}" == 'Friday');
+    assert("{$zone}" == 'Europe/Zurich');
+    assert("{$m} {$wd}" == 'March Friday');
+}

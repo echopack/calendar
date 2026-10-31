@@ -146,9 +146,9 @@ A single quote is opened and never closed.
 
 `m` (minutes) in a pattern with no hour. You almost certainly meant `M`.
 
-#### `hourWithoutPeriod(usize $at)`
+#### `hourWithoutPeriod(string $letter, usize $at)`
 
-A 12-hour clock (`h` or `K`) without `a`. You almost certainly meant `H`.
+A 12-hour clock without `a`. `$letter` is the one the pattern used, `h` or `K`. You almost certainly meant `H`.
 
 **Returned by:** `Format::of` only. `Format('...')` and pattern strings passed to `format` stop the program instead. See [Formatting](./formatting.md#mistakes-are-caught-early).
 

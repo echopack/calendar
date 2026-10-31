@@ -5,17 +5,21 @@ use std::time;
 /**
  * A clock that moves only when told to. Keep a handle, give the same object to a
  * `Calendar`, and `advance` it between steps of a test.
+ *
+ * Threads may share it: the instant is one atomic word of nanoseconds since 1970, so a
+ * read never sees half a move. That word wraps in 2262.
  */
+#[atomic]
 public class ManualClock : Clock
 {
-    private time::timestamp $current;
+    private atomic<int64> $nanos;
 
     /**
      * A clock that reads `$start` until it is moved.
      */
     constructor(time::timestamp $start)
     {
-        $this->current = $start;
+        $this->nanos = atomic<int64>($start->unix_nanos());
     }
 
     /**
@@ -23,7 +27,7 @@ public class ManualClock : Clock
      */
     public const function now() : time::timestamp
     {
-        return $this->current;
+        return time::timestamp::from_unix_secs(0) + time::duration::nanos($this->nanos->load());
     }
 
     /**
@@ -32,7 +36,7 @@ public class ManualClock : Clock
      */
     public function set(time::timestamp $at) : void
     {
-        $this->current = $at;
+        $this->nanos->store($at->unix_nanos());
     }
 
     /**
@@ -41,6 +45,6 @@ public class ManualClock : Clock
      */
     public function advance(const time::duration& $by) : void
     {
-        $this->current = $this->current + $by;
+        $this->nanos->add($by->as_nanos());
     }
 }
