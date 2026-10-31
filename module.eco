@@ -1,5 +1,5 @@
 #[module: "calendar"]
-#[version: "0.1.0"] // x-release-please-version
+#[version: "0.1.1"] // x-release-please-version
 #[epm::license: "MIT"]
 #[epm::description: "Calendar, Date handling and formatting for Echo"]
 
