@@ -61,7 +61,7 @@ public class SystemZones : ZoneSource
             return .error(.invalid($id));
         }
 
-        string $bytes = guard std::io::readfile(std::env::join($this->dir, $id)) else ($e) {
+        string $bytes = guard std::fs::readfile($this->dir / $id) else ($e) {
             if ($id == 'UTC') {
                 return .ok(Zone::utc());
             }
@@ -101,7 +101,7 @@ public class SystemZones : ZoneSource
     public function ids() : array<string>
     {
         array<string> $out = [];
-        std::io::file $f = guard std::io::open(std::env::join($this->dir, 'tzdata.zi'), .read) else {
+        std::io::file $f = guard std::fs::open($this->dir / 'tzdata.zi', .read) else {
             return $out;
         };
 

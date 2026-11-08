@@ -329,11 +329,11 @@ public class Zone
     {
         string $id = 'localtime';
         string $real = $path;
-        result<string, std::io::ioerror> $resolved = std::io::realpath($path);
+        result<std::fs::path, std::io::ioerror> $resolved = std::fs::realpath($path);
 
         if ($resolved->has_value()) {
-            string $r = guard $resolved;
-            $real = $r;
+            std::fs::path $r = guard $resolved;
+            $real = $r->string();
         }
 
         usize $at = $real->find('zoneinfo/');
@@ -347,7 +347,7 @@ public class Zone
             }
         }
 
-        string $bytes = guard std::io::readfile($real) else ($e) {
+        string $bytes = guard std::fs::readfile($real) else ($e) {
             return .error(.unreadable($path, $e->message()));
         };
 

@@ -209,7 +209,7 @@ test tzif_refuses_damaged_files
     assert(Tzif::parse('x', tzif([1000000000, 1000000000], 3600, 7200, 1, 4))->failed());
 
     // every cut of a real file either reads or fails; none stops the program
-    string $bytes = guard std::io::readfile('/usr/share/zoneinfo/Europe/Zurich');
+    string $bytes = guard std::fs::readfile('/usr/share/zoneinfo/Europe/Zurich');
     usize $read = 0;
 
     for (usize $n = 0; $n < $bytes->size(); $n = $n + 13) {
